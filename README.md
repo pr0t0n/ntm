@@ -96,6 +96,22 @@ Logs: `journalctl -u ntm-agent -f`.
 `NTM_SCAN_INTERVAL`, `NTM_NMAP_FLAGS`, `NTM_DNS_RESOLVER`, `NTM_TLS_INSECURE`,
 `NTM_STATE_PATH`, `NTM_AGENT_NAME`.
 
+## Resolução de problemas
+
+**"Rodei nmap manualmente e achei muita coisa, mas a plataforma mostra pouco/nada"**
+- Verifique o **escopo** do agente: `docker exec ntm-agent sh -c 'echo $NTM_RANGES'`.
+  O `.env` local pode estar limitando as faixas. O default escaneia as três redes
+  privadas.
+- O agente faz **scan SYN (`-sS`)**, que exige `CAP_NET_RAW` (concedido no compose
+  e no unit systemd). Sem ele, caia para connect scan: `NTM_NMAP_FLAGS="-sT -sV --top-ports 100 --open -T4 -n --host-timeout 60s"`.
+
+**Docker Desktop no macOS/Windows distorce o scan de faixas off-subnet.** A VM do
+Docker faz NAT de qualquer endereço fora da rede do container (ex.: todo
+`192.168.x` / `10.x`) aparecer "up", criando **hosts fantasma** cujas portas
+penduram o scanner. Isso **não** acontece num host Linux real na rede alvo. Para
+um teste fiel, instale o agente num host Linux da sua rede (veja acima) ou, no
+lab, escaneie a rede do próprio compose (`172.28.0.0/24`), que tem hosts reais.
+
 ## Notas de produção
 
 - Troque o certificado self-signed por um emitido por uma CA confiável (monte

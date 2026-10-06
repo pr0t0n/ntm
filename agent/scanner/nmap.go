@@ -177,12 +177,21 @@ func Discover(ctx context.Context, binary string, flags []string, targets []stri
 	return live, nil
 }
 
-// DiscoveryFlags returns the nmap flags for the ping-sweep phase.
+// DiscoveryFlags returns the nmap flags for the host-discovery phase. The
+// default combines ICMP echo/timestamp with TCP SYN/ACK probes to common service
+// ports, so hosts that block ping but expose services are still found (a plain
+// -sn ping sweep misses those — the same hosts a -sS scan would reveal).
 func DiscoveryFlags(override string) []string {
 	if strings.TrimSpace(override) != "" {
 		return strings.Fields(override)
 	}
-	return []string{"-sn", "-n", "-T4", "--min-rate", "1000"}
+	return []string{
+		"-sn", "-n", "-T4",
+		"-PE", "-PP", // ICMP echo + timestamp
+		"-PS21,22,23,25,53,80,110,135,139,143,443,445,993,995,1433,3306,3389,8080", // TCP SYN
+		"-PA80,443,3389", // TCP ACK
+		"--min-rate", "1000",
+	}
 }
 
 // TopPortsNote documents the ports covered by --top-ports 100 (informational).

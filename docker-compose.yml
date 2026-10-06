@@ -52,9 +52,11 @@ services:
       NTM_SCAN_INTERVAL: "${NTM_SCAN_INTERVAL:-30m}"
       NTM_POLL_INTERVAL: "${NTM_POLL_INTERVAL:-5s}"  # how fast on-demand runs/stops are picked up
       NTM_TLS_INSECURE: "true"   # self-signed platform cert in the lab
-      # Phase 1: fast host discovery (ping sweep). Phase 2 only scans live hosts.
-      NTM_DISCOVERY_FLAGS: "${NTM_DISCOVERY_FLAGS:--sn -n -T4 --min-rate 20000 --max-retries 1 --host-timeout 300ms}"
-      NTM_NMAP_FLAGS: "-sT -sV --top-ports 100 --open -T4 -n"
+      # Phase 1: host discovery (ICMP + TCP SYN/ACK probes). Phase 2 service-scans
+      # only live hosts with a SYN scan (needs NET_RAW) and a per-host timeout so
+      # no single host can stall the whole run.
+      NTM_DISCOVERY_FLAGS: "${NTM_DISCOVERY_FLAGS:-}"
+      NTM_NMAP_FLAGS: "${NTM_NMAP_FLAGS:--sS -sV --top-ports 100 --open -T4 -n --host-timeout 60s --max-retries 2}"
     volumes:
       - ntm-agent-state:/var/lib/ntm
     networks:
