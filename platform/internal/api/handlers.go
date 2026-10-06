@@ -30,6 +30,11 @@ func (s *Server) Routes(web http.Handler) http.Handler {
 	// Agent-facing endpoints (HTTPS/TLS).
 	mux.HandleFunc("POST /api/v1/enroll", s.handleEnroll)
 	mux.HandleFunc("POST /api/v1/scan-results", s.authAgent(s.handleScanResults))
+	mux.HandleFunc("GET /api/v1/agent/commands", s.authAgent(s.handleCommands))
+
+	// Agent management (frontend).
+	mux.HandleFunc("GET /api/v1/agents", s.handleAgents)
+	mux.HandleFunc("POST /api/v1/agents/{id}/run", s.handleRunAgent)
 
 	// Frontend endpoints.
 	mux.HandleFunc("GET /api/v1/dashboard", s.handleDashboard)
@@ -111,12 +116,54 @@ func (s *Server) handleScanResults(w http.ResponseWriter, r *http.Request, agent
 			log.Printf("insert dns %s: %v", d.Name, err)
 		}
 	}
+	s.store.MarkScanDone(ctx, agent.ID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"accepted":  true,
 		"hosts":     ingested,
 		"dns":       len(report.DNS),
 		"agent_id":  agent.ID,
 	})
+}
+
+// handleCommands lets a polling agent learn whether an on-demand scan was
+// requested for it from the UI; the request is consumed (cleared) atomically.
+func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request, agent models.Agent) {
+	run, err := s.store.ConsumeScanRequest(r.Context(), agent.ID)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "command error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"scan_now": run})
+}
+
+// --- Agent management (frontend) ---
+
+func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
+	agents, err := s.store.ListAgents(r.Context())
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "agents error")
+		return
+	}
+	if agents == nil {
+		agents = []models.Agent{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"agents": agents})
+}
+
+func (s *Server) handleRunAgent(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	if err := s.store.RequestScan(r.Context(), id); errors.Is(err, db.ErrNotFound) {
+		httpError(w, http.StatusNotFound, "agent not found")
+		return
+	} else if err != nil {
+		httpError(w, http.StatusInternalServerError, "could not request scan")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"queued": true, "agent_id": id})
 }
 
 // --- Frontend endpoints ---

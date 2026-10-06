@@ -46,7 +46,13 @@ func Open(ctx context.Context, url string) (*Store, error) {
 func (s *Store) Close() { s.pool.Close() }
 
 func (s *Store) migrate(ctx context.Context) error {
-	_, err := s.pool.Exec(ctx, schema)
+	if _, err := s.pool.Exec(ctx, schema); err != nil {
+		return err
+	}
+	// Idempotent columns for on-demand scanning.
+	_, err := s.pool.Exec(ctx, `
+		ALTER TABLE agents ADD COLUMN IF NOT EXISTS scan_requested BOOLEAN NOT NULL DEFAULT false;
+		ALTER TABLE agents ADD COLUMN IF NOT EXISTS last_scan_at TIMESTAMPTZ;`)
 	return err
 }
 
@@ -148,6 +154,68 @@ func (s *Store) CountAgents(ctx context.Context) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM agents`).Scan(&n)
 	return n, err
+}
+
+// ListAgents returns all enrolled agents with scheduling metadata for the UI.
+func (s *Store) ListAgents(ctx context.Context) ([]models.Agent, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, name, ranges, COALESCE(last_seen, 'epoch'::timestamptz),
+		        last_scan_at, scan_requested, created_at
+		 FROM agents ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.Agent
+	for rows.Next() {
+		var a models.Agent
+		var ranges string
+		var lastScan *time.Time
+		if err := rows.Scan(&a.ID, &a.Name, &ranges, &a.LastSeen, &lastScan,
+			&a.ScanRequested, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		if ranges != "" {
+			a.Ranges = strings.Split(ranges, ",")
+		}
+		if lastScan != nil {
+			a.LastScanAt = *lastScan
+		}
+		a.Online = time.Since(a.LastSeen) < 90*time.Second
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// RequestScan flags an agent to run a scan on its next poll.
+func (s *Store) RequestScan(ctx context.Context, id int64) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE agents SET scan_requested=true WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ConsumeScanRequest atomically clears and returns whether a scan was requested
+// for the given agent (called by the agent while polling).
+func (s *Store) ConsumeScanRequest(ctx context.Context, id int64) (bool, error) {
+	var requested bool
+	err := s.pool.QueryRow(ctx,
+		`UPDATE agents SET scan_requested=false
+		 WHERE id=$1 AND scan_requested=true
+		 RETURNING true`, id).Scan(&requested)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return requested, err
+}
+
+// MarkScanDone records that an agent just uploaded a report.
+func (s *Store) MarkScanDone(ctx context.Context, id int64) {
+	_, _ = s.pool.Exec(ctx, `UPDATE agents SET last_scan_at=now() WHERE id=$1`, id)
 }
 
 // --- Hosts / ingest ---

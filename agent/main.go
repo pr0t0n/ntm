@@ -23,6 +23,7 @@ type agentConfig struct {
 	NmapFlags    string
 	Resolver     string
 	Interval     time.Duration
+	PollInterval time.Duration
 	Insecure     bool // accept self-signed platform cert (lab default)
 	StatePath    string
 }
@@ -38,6 +39,10 @@ func loadConfig() agentConfig {
 	if err != nil {
 		interval = 30 * time.Minute
 	}
+	poll, err := time.ParseDuration(env("NTM_POLL_INTERVAL", "15s"))
+	if err != nil {
+		poll = 15 * time.Second
+	}
 	return agentConfig{
 		PlatformURL:  strings.TrimRight(env("NTM_PLATFORM_URL", "https://localhost:8443"), "/"),
 		InstallToken: env("NTM_INSTALL_TOKEN", ""),
@@ -47,6 +52,7 @@ func loadConfig() agentConfig {
 		NmapFlags:    env("NTM_NMAP_FLAGS", ""),
 		Resolver:     env("NTM_DNS_RESOLVER", ""),
 		Interval:     interval,
+		PollInterval: poll,
 		Insecure:     env("NTM_TLS_INSECURE", "true") == "true",
 		StatePath:    env("NTM_STATE_PATH", "/var/lib/ntm/agent-state.json"),
 	}
@@ -76,11 +82,50 @@ func main() {
 	}
 	log.Printf("enrolled as agent #%d, scanning ranges: %s", state.AgentID, strings.Join(cfg.Ranges, " "))
 
+	// Run once on start, then combine a periodic scan with on-demand runs
+	// triggered from the UI (polled via /agent/commands).
+	runScan(client, cfg, state)
+	lastFull := time.Now()
+	log.Printf("polling for on-demand runs every %s; periodic scan every %s", cfg.PollInterval, cfg.Interval)
+
 	for {
-		runScan(client, cfg, state)
-		log.Printf("sleeping %s until next scan", cfg.Interval)
-		time.Sleep(cfg.Interval)
+		time.Sleep(cfg.PollInterval)
+		if pollCommand(client, cfg, state) {
+			log.Printf("on-demand scan requested from platform")
+			runScan(client, cfg, state)
+			lastFull = time.Now()
+			continue
+		}
+		if time.Since(lastFull) >= cfg.Interval {
+			runScan(client, cfg, state)
+			lastFull = time.Now()
+		}
 	}
+}
+
+// pollCommand asks the platform whether an on-demand scan was requested for this
+// agent. Errors are non-fatal; the periodic schedule still applies.
+func pollCommand(client *http.Client, cfg agentConfig, state agentState) bool {
+	req, err := http.NewRequest(http.MethodGet, cfg.PlatformURL+"/api/v1/agent/commands", nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Authorization", "Bearer "+state.AgentToken)
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	var out struct {
+		ScanNow bool `json:"scan_now"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&out) != nil {
+		return false
+	}
+	return out.ScanNow
 }
 
 // ensureEnrolled loads a saved agent token or performs enrollment with the

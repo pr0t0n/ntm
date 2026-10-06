@@ -54,11 +54,61 @@ async function loadDashboard() {
   safe(() => drawDoughnut("chartOS", d.by_os || {}, (k, i) => OS_COLORS[i % OS_COLORS.length], k => k));
   safe(() => drawApps(d.top_apps || []));
   fillRecent(d.recent || []);
+  loadAgents();
 }
 
 function safe(fn) {
   try { fn(); } catch (e) { console.error("render error:", e); }
 }
+
+// ---- On-demand scan runner ----
+async function loadAgents() {
+  let data;
+  try { data = await getJSON(`${API}/agents`); }
+  catch (e) { console.error(e); return; }
+  const sel = document.getElementById("agentSelect");
+  const prev = sel.value;
+  const agents = data.agents || [];
+  if (agents.length === 0) {
+    sel.innerHTML = `<option value="">Nenhum agente registrado</option>`;
+    return;
+  }
+  sel.innerHTML = agents.map(a => {
+    const dot = a.online ? "🟢" : "⚪";
+    const last = a.last_scan_at && !a.last_scan_at.startsWith("0001")
+      ? new Date(a.last_scan_at).toLocaleTimeString("pt-BR") : "nunca";
+    const pend = a.scan_requested ? " · scan pendente" : "";
+    return `<option value="${a.id}">${dot} #${a.id} ${esc(a.name)} — último scan: ${last}${pend}</option>`;
+  }).join("");
+  if (prev) sel.value = prev;
+}
+
+async function runAgent() {
+  const sel = document.getElementById("agentSelect");
+  const id = sel.value;
+  const btn = document.getElementById("runBtn");
+  const msg = document.getElementById("runnerMsg");
+  if (!id) { setMsg(msg, "Selecione um agente.", "err"); return; }
+  btn.disabled = true;
+  setMsg(msg, "Enfileirando…", "");
+  try {
+    const r = await fetch(`${API}/agents/${id}/run`, { method: "POST" });
+    if (!r.ok) throw new Error(await r.text());
+    setMsg(msg, "✓ Análise solicitada — o agente inicia em instantes.", "ok");
+    setTimeout(loadAgents, 1500);
+    // Refresh the dashboard once the agent has had time to scan and report.
+    setTimeout(() => {
+      if (document.querySelector(".nav-item.active").dataset.view === "dashboard") loadDashboard();
+    }, 20000);
+  } catch (e) {
+    console.error(e);
+    setMsg(msg, "Falha ao solicitar análise.", "err");
+  } finally {
+    setTimeout(() => { btn.disabled = false; }, 1200);
+  }
+}
+
+function setMsg(el, text, cls) { el.textContent = text; el.className = "muted " + (cls || ""); }
 
 function labelAsset(k) {
   return { computer: "Computadores", server: "Servidores", network: "Equipamentos",
@@ -215,4 +265,5 @@ function boot() {
   switchView(["dashboard", "map", "cmdb"].includes(v) ? v : "dashboard");
 }
 window.addEventListener("hashchange", boot);
+document.getElementById("runBtn").addEventListener("click", runAgent);
 boot();

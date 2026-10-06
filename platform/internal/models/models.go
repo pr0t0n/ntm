@@ -6,12 +6,15 @@ import "time"
 // an authorized host inside the customer network and reports asset data back
 // over HTTPS/TLS.
 type Agent struct {
-	ID         int64     `json:"id"`
-	Name       string    `json:"name"`
-	AgentToken string    `json:"-"` // bearer token used by the agent to authenticate ingests
-	Ranges     []string  `json:"ranges"`
-	LastSeen   time.Time `json:"last_seen"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID            int64     `json:"id"`
+	Name          string    `json:"name"`
+	AgentToken    string    `json:"-"` // bearer token used by the agent to authenticate ingests
+	Ranges        []string  `json:"ranges"`
+	LastSeen      time.Time `json:"last_seen"`
+	LastScanAt    time.Time `json:"last_scan_at"`
+	ScanRequested bool      `json:"scan_requested"`
+	Online        bool      `json:"online"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 // Host is a discovered asset in the inventory (CMDB record).
