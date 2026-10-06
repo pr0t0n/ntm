@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NTM — Network Threat Monitoring</title>
+  <link rel="stylesheet" href="/style.css" />
+  <script src="/vendor/chart.umd.min.js" defer></script>
+  <script src="/vendor/cytoscape.min.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">NTM</div>
+        <div class="brand-sub">Network Threat Monitoring</div>
+      </div>
+      <nav class="nav">
+        <button class="nav-item active" data-view="dashboard">
+          <span class="ico">▦</span><span>Dashboard</span>
+        </button>
+        <button class="nav-item" data-view="map">
+          <span class="ico">◈</span><span>Mapa de Rede</span>
+        </button>
+        <button class="nav-item" data-view="cmdb">
+          <span class="ico">▤</span><span>CMDB</span>
+        </button>
+      </nav>
+      <div class="sidebar-foot">
+        <div id="agentStatus" class="agent-status">— agentes</div>
+        <button id="refreshBtn" class="refresh">↻ Atualizar</button>
+      </div>
+    </aside>
+
+    <main class="content">
+      <!-- DASHBOARD -->
+      <section id="view-dashboard" class="view active">
+        <header class="view-head">
+          <h1>Dashboard</h1>
+          <p class="muted">Inventário de ativos descobertos na rede</p>
+        </header>
+
+        <div class="cards">
+          <div class="card kpi"><div class="kpi-label">Total de Hosts</div><div class="kpi-value" id="kpiTotal">—</div><div class="kpi-foot"><span class="up" id="kpiUp">0 up</span> · <span class="down" id="kpiDown">0 down</span></div></div>
+          <div class="card kpi"><div class="kpi-label">Computadores</div><div class="kpi-value" id="kpiComputers">—</div><div class="kpi-foot">estações de trabalho</div></div>
+          <div class="card kpi"><div class="kpi-label">Servidores</div><div class="kpi-value" id="kpiServers">—</div><div class="kpi-foot">serviços expostos</div></div>
+          <div class="card kpi"><div class="kpi-label">Equipamentos</div><div class="kpi-value" id="kpiNetwork">—</div><div class="kpi-foot">rede / impressoras</div></div>
+          <div class="card kpi"><div class="kpi-label">Portas Abertas</div><div class="kpi-value" id="kpiPorts">—</div><div class="kpi-foot">TCP em escuta</div></div>
+        </div>
+
+        <div class="charts">
+          <div class="card chart-card">
+            <h3>Hosts por Tipo</h3>
+            <canvas id="chartAssets" height="220"></canvas>
+          </div>
+          <div class="card chart-card">
+            <h3>Sistemas Operacionais</h3>
+            <canvas id="chartOS" height="220"></canvas>
+          </div>
+          <div class="card chart-card wide">
+            <h3>Aplicações (Top 10)</h3>
+            <canvas id="chartApps" height="220"></canvas>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Ativos recentes</h3>
+          <table class="tbl" id="recentTable">
+            <thead><tr><th>IP</th><th>Hostname</th><th>Tipo</th><th>SO</th><th>Status</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- NETWORK MAP -->
+      <section id="view-map" class="view">
+        <header class="view-head">
+          <h1>Mapa de Rede</h1>
+          <p class="muted">Interligações dos sistemas até a borda (Internet)</p>
+        </header>
+        <div class="map-legend">
+          <span><i class="dot net-internet"></i> Internet</span>
+          <span><i class="dot net-subnet"></i> Sub-rede</span>
+          <span><i class="dot net-server"></i> Servidor</span>
+          <span><i class="dot net-computer"></i> Computador</span>
+          <span><i class="dot net-network"></i> Equipamento</span>
+        </div>
+        <div id="cy" class="cy"></div>
+      </section>
+
+      <!-- CMDB -->
+      <section id="view-cmdb" class="view">
+        <header class="view-head">
+          <h1>CMDB</h1>
+          <p class="muted">Base de ativos — busca por IP, Hostname, Aplicação ou Porta</p>
+        </header>
+        <div class="search-bar">
+          <select id="searchField">
+            <option value="all">Todos os campos</option>
+            <option value="ip">IP</option>
+            <option value="hostname">Hostname</option>
+            <option value="app">Aplicação</option>
+            <option value="port">Porta</option>
+          </select>
+          <input id="searchInput" type="text" placeholder="Pesquisar ativos… (ex: 192.168.1.10, dns, 443)" />
+          <button id="searchBtn">Buscar</button>
+          <span id="searchCount" class="muted"></span>
+        </div>
+        <div class="card nopad">
+          <table class="tbl cmdb">
+            <thead><tr><th>IP</th><th>Hostname</th><th>Tipo</th><th>SO</th><th>MAC / Vendor</th><th>Portas / Apps</th><th>Status</th></tr></thead>
+            <tbody id="cmdbBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="hostModal" class="modal hidden">
+    <div class="modal-box">
+      <button class="modal-close" id="modalClose">×</button>
+      <div id="modalContent"></div>
+    </div>
+  </div>
+</body>
+</html>

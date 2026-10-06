@@ -1,0 +1,7 @@
+# TLS material and local state
+platform/certs/
+*.crt
+*.key
+.env
+# build artifacts
+/tmp/ntm-*
