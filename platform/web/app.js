@@ -62,6 +62,10 @@ function safe(fn) {
 }
 
 // ---- On-demand scan runner ----
+let agentsById = {};     // id -> agent snapshot from the last poll
+let runnerTimer = null;  // 1s ticker that refreshes the "executing (mm:ss)" label
+let agentsPoll = null;   // periodic server refresh while on the dashboard
+
 async function loadAgents() {
   let data;
   try { data = await getJSON(`${API}/agents`); }
@@ -69,42 +73,101 @@ async function loadAgents() {
   const sel = document.getElementById("agentSelect");
   const prev = sel.value;
   const agents = data.agents || [];
+  agentsById = {};
+  agents.forEach(a => { agentsById[a.id] = a; });
+
   if (agents.length === 0) {
     sel.innerHTML = `<option value="">Nenhum agente registrado</option>`;
-    return;
+  } else {
+    sel.innerHTML = agents.map(a => {
+      const dot = a.online ? "🟢" : "⚪";
+      const run = a.scan_state === "running" ? " · ⏳ executando" : "";
+      const last = a.last_scan_at && !a.last_scan_at.startsWith("0001")
+        ? new Date(a.last_scan_at).toLocaleTimeString("pt-BR") : "nunca";
+      return `<option value="${a.id}">${dot} #${a.id} ${esc(a.name)} — último scan: ${last}${run}</option>`;
+    }).join("");
+    sel.value = prev && agentsById[prev] ? prev : agents[0].id;
   }
-  sel.innerHTML = agents.map(a => {
-    const dot = a.online ? "🟢" : "⚪";
-    const last = a.last_scan_at && !a.last_scan_at.startsWith("0001")
-      ? new Date(a.last_scan_at).toLocaleTimeString("pt-BR") : "nunca";
-    const pend = a.scan_requested ? " · scan pendente" : "";
-    return `<option value="${a.id}">${dot} #${a.id} ${esc(a.name)} — último scan: ${last}${pend}</option>`;
-  }).join("");
-  if (prev) sel.value = prev;
+  updateRunnerUI();
+  ensurePolling();
+}
+
+// updateRunnerUI reflects the selected agent's run state on the buttons/labels.
+function updateRunnerUI() {
+  const sel = document.getElementById("agentSelect");
+  const runBtn = document.getElementById("runBtn");
+  const stopBtn = document.getElementById("stopBtn");
+  const msg = document.getElementById("runnerMsg");
+  const a = agentsById[sel.value];
+  const running = a && a.scan_state === "running";
+
+  stopBtn.classList.toggle("hidden", !running);
+  runBtn.disabled = !!running;
+  if (running) {
+    const started = a.scan_started_at && !a.scan_started_at.startsWith("0001")
+      ? new Date(a.scan_started_at) : null;
+    const elapsed = started ? fmtElapsed(Date.now() - started.getTime()) : "";
+    const since = started ? started.toLocaleTimeString("pt-BR") : "—";
+    runBtn.textContent = `⏳ Executando ${elapsed}`;
+    setMsg(msg, `Iniciado às ${since}`, "ok");
+  } else {
+    runBtn.textContent = "▶ RODAR";
+  }
+}
+
+function fmtElapsed(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+}
+
+// ensurePolling keeps the runner live: a 1s ticker updates the elapsed label and
+// every 4s we refresh agent state from the server (only while on the dashboard).
+function ensurePolling() {
+  if (!runnerTimer) runnerTimer = setInterval(updateRunnerUI, 1000);
+  if (!agentsPoll) agentsPoll = setInterval(() => {
+    if (document.querySelector(".nav-item.active").dataset.view === "dashboard") loadAgents();
+  }, 4000);
 }
 
 async function runAgent() {
   const sel = document.getElementById("agentSelect");
   const id = sel.value;
-  const btn = document.getElementById("runBtn");
   const msg = document.getElementById("runnerMsg");
   if (!id) { setMsg(msg, "Selecione um agente.", "err"); return; }
-  btn.disabled = true;
+  document.getElementById("runBtn").disabled = true;
   setMsg(msg, "Enfileirando…", "");
   try {
     const r = await fetch(`${API}/agents/${id}/run`, { method: "POST" });
     if (!r.ok) throw new Error(await r.text());
-    setMsg(msg, "✓ Análise solicitada — o agente inicia em instantes.", "ok");
-    setTimeout(loadAgents, 1500);
-    // Refresh the dashboard once the agent has had time to scan and report.
+    setMsg(msg, "✓ Análise solicitada — iniciando…", "ok");
+    setTimeout(loadAgents, 1200);
+    // Refresh inventory once the agent has had time to scan and report.
     setTimeout(() => {
       if (document.querySelector(".nav-item.active").dataset.view === "dashboard") loadDashboard();
     }, 20000);
   } catch (e) {
     console.error(e);
     setMsg(msg, "Falha ao solicitar análise.", "err");
+    document.getElementById("runBtn").disabled = false;
+  }
+}
+
+async function stopAgent() {
+  const id = document.getElementById("agentSelect").value;
+  const msg = document.getElementById("runnerMsg");
+  if (!id) return;
+  document.getElementById("stopBtn").disabled = true;
+  setMsg(msg, "Interrompendo scan…", "err");
+  try {
+    const r = await fetch(`${API}/agents/${id}/stop`, { method: "POST" });
+    if (!r.ok) throw new Error(await r.text());
+    setMsg(msg, "⏹ Parada solicitada — encerrando o nmap.", "err");
+    setTimeout(loadAgents, 1500);
+  } catch (e) {
+    console.error(e);
+    setMsg(msg, "Falha ao interromper.", "err");
   } finally {
-    setTimeout(() => { btn.disabled = false; }, 1200);
+    setTimeout(() => { document.getElementById("stopBtn").disabled = false; }, 1200);
   }
 }
 
@@ -266,4 +329,6 @@ function boot() {
 }
 window.addEventListener("hashchange", boot);
 document.getElementById("runBtn").addEventListener("click", runAgent);
+document.getElementById("stopBtn").addEventListener("click", stopAgent);
+document.getElementById("agentSelect").addEventListener("change", updateRunnerUI);
 boot();

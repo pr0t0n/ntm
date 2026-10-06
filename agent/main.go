@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/valid/ntm/agent/scanner"
@@ -19,9 +20,10 @@ type agentConfig struct {
 	InstallToken string // pasted by the operator during installation
 	AgentName    string
 	Ranges       []string
-	NmapBinary   string
-	NmapFlags    string
-	Resolver     string
+	NmapBinary     string
+	NmapFlags      string
+	DiscoveryFlags string
+	Resolver       string
 	Interval     time.Duration
 	PollInterval time.Duration
 	Insecure     bool // accept self-signed platform cert (lab default)
@@ -48,9 +50,10 @@ func loadConfig() agentConfig {
 		InstallToken: env("NTM_INSTALL_TOKEN", ""),
 		AgentName:    env("NTM_AGENT_NAME", hostnameOr("ntm-agent")),
 		Ranges:       splitCSV(ranges),
-		NmapBinary:   env("NTM_NMAP_BIN", "nmap"),
-		NmapFlags:    env("NTM_NMAP_FLAGS", ""),
-		Resolver:     env("NTM_DNS_RESOLVER", ""),
+		NmapBinary:     env("NTM_NMAP_BIN", "nmap"),
+		NmapFlags:      env("NTM_NMAP_FLAGS", ""),
+		DiscoveryFlags: env("NTM_DISCOVERY_FLAGS", ""),
+		Resolver:       env("NTM_DNS_RESOLVER", ""),
 		Interval:     interval,
 		PollInterval: poll,
 		Insecure:     env("NTM_TLS_INSECURE", "true") == "true",
@@ -82,50 +85,114 @@ func main() {
 	}
 	log.Printf("enrolled as agent #%d, scanning ranges: %s", state.AgentID, strings.Join(cfg.Ranges, " "))
 
-	// Run once on start, then combine a periodic scan with on-demand runs
-	// triggered from the UI (polled via /agent/commands).
-	runScan(client, cfg, state)
+	r := &runner{client: client, cfg: cfg, state: state}
+	r.start("startup")             // initial scan
 	lastFull := time.Now()
-	log.Printf("polling for on-demand runs every %s; periodic scan every %s", cfg.PollInterval, cfg.Interval)
+	log.Printf("polling for commands every %s; periodic scan every %s", cfg.PollInterval, cfg.Interval)
 
+	// A single poll loop drives both on-demand and scheduled scans. Because the
+	// scan runs in its own goroutine, polling continues during a scan so a STOP
+	// command can cancel the running nmap process.
 	for {
 		time.Sleep(cfg.PollInterval)
-		if pollCommand(client, cfg, state) {
-			log.Printf("on-demand scan requested from platform")
-			runScan(client, cfg, state)
-			lastFull = time.Now()
-			continue
+		scanNow, stopNow := pollCommand(client, cfg, state)
+		if stopNow {
+			r.stop()
 		}
-		if time.Since(lastFull) >= cfg.Interval {
-			runScan(client, cfg, state)
+		if scanNow {
+			if r.start("on-demand") {
+				lastFull = time.Now()
+			}
+		}
+		if time.Since(lastFull) >= cfg.Interval && !r.isRunning() {
+			r.start("scheduled")
 			lastFull = time.Now()
 		}
 	}
 }
 
-// pollCommand asks the platform whether an on-demand scan was requested for this
-// agent. Errors are non-fatal; the periodic schedule still applies.
-func pollCommand(client *http.Client, cfg agentConfig, state agentState) bool {
+// runner serializes scan execution and exposes a cancel handle so an in-flight
+// nmap can be killed on demand.
+type runner struct {
+	client  *http.Client
+	cfg     agentConfig
+	state   agentState
+	mu      sync.Mutex
+	cancel  context.CancelFunc
+	running bool
+}
+
+func (r *runner) isRunning() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.running
+}
+
+// start launches a scan unless one is already running. Returns true if a scan
+// was started.
+func (r *runner) start(trigger string) bool {
+	r.mu.Lock()
+	if r.running {
+		r.mu.Unlock()
+		log.Printf("scan already running; ignoring %s trigger", trigger)
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
+	r.cancel = cancel
+	r.running = true
+	r.mu.Unlock()
+
+	log.Printf("starting scan (%s)", trigger)
+	go func() {
+		defer func() {
+			cancel()
+			r.mu.Lock()
+			r.running = false
+			r.cancel = nil
+			r.mu.Unlock()
+		}()
+		runScan(ctx, r.client, r.cfg, r.state)
+	}()
+	return true
+}
+
+// stop cancels the in-flight scan context, which kills the nmap child process
+// (exec.CommandContext sends SIGKILL on cancel).
+func (r *runner) stop() {
+	r.mu.Lock()
+	cancel := r.cancel
+	running := r.running
+	r.mu.Unlock()
+	if running && cancel != nil {
+		log.Printf("STOP requested — killing running scan")
+		cancel()
+	}
+}
+
+// pollCommand asks the platform for pending scan/stop commands. Errors are
+// non-fatal; the periodic schedule still applies.
+func pollCommand(client *http.Client, cfg agentConfig, state agentState) (scanNow, stopNow bool) {
 	req, err := http.NewRequest(http.MethodGet, cfg.PlatformURL+"/api/v1/agent/commands", nil)
 	if err != nil {
-		return false
+		return false, false
 	}
 	req.Header.Set("Authorization", "Bearer "+state.AgentToken)
 	resp, err := client.Do(req)
 	if err != nil {
-		return false
+		return false, false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return false
+		return false, false
 	}
 	var out struct {
 		ScanNow bool `json:"scan_now"`
+		StopNow bool `json:"stop_now"`
 	}
 	if json.NewDecoder(resp.Body).Decode(&out) != nil {
-		return false
+		return false, false
 	}
-	return out.ScanNow
+	return out.ScanNow, out.StopNow
 }
 
 // ensureEnrolled loads a saved agent token or performs enrollment with the
@@ -158,17 +225,39 @@ func ensureEnrolled(client *http.Client, cfg agentConfig) (agentState, error) {
 }
 
 // runScan executes a full discovery pass: nmap host/port scan, ARP enrichment,
-// DNS enumeration, then uploads the report to the platform.
-func runScan(client *http.Client, cfg agentConfig, state agentState) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
-	defer cancel()
+// DNS enumeration, then uploads the report to the platform. The context lets an
+// on-demand STOP cancel (kill) the running nmap mid-scan.
+func runScan(ctx context.Context, client *http.Client, cfg agentConfig, state agentState) {
+	reportStatus(client, cfg, state, "running")
 
-	flags := scanner.DefaultFlags(cfg.NmapFlags)
-	log.Printf("scanning %d range(s) with: nmap %s", len(cfg.Ranges), strings.Join(flags, " "))
-
-	hosts, err := scanner.RunNmap(ctx, cfg.NmapBinary, flags, cfg.Ranges)
+	// Phase 1 — fast host discovery across the (possibly large) ranges.
+	discFlags := scanner.DiscoveryFlags(cfg.DiscoveryFlags)
+	log.Printf("phase 1/2: host discovery on %d range(s) with: nmap %s",
+		len(cfg.Ranges), strings.Join(discFlags, " "))
+	live, err := scanner.Discover(ctx, cfg.NmapBinary, discFlags, cfg.Ranges)
 	if err != nil {
-		log.Printf("nmap error: %v", err)
+		log.Printf("discovery error: %v", err)
+	}
+	log.Printf("phase 1/2: %d live host(s) found", len(live))
+
+	// Phase 2 — detailed service scan of only the live hosts.
+	var hosts []scanner.Host
+	if len(live) > 0 {
+		flags := scanner.DefaultFlags(cfg.NmapFlags)
+		log.Printf("phase 2/2: service scan of %d host(s) with: nmap %s",
+			len(live), strings.Join(flags, " "))
+		hosts, err = scanner.RunNmap(ctx, cfg.NmapBinary, flags, live)
+		if err != nil {
+			log.Printf("nmap error: %v", err)
+		}
+	}
+
+	// If the scan was stopped/cancelled, discard partial results so a STOP never
+	// degrades the existing inventory; just return the agent to idle.
+	if ctx.Err() != nil {
+		log.Printf("scan cancelled — discarding partial results")
+		reportStatus(client, cfg, state, "idle")
+		return
 	}
 
 	arp := scanner.ReadARPTable()

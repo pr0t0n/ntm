@@ -93,7 +93,14 @@ body {
   padding: 10px 22px; border-radius: 8px; cursor: pointer; font-size: 13px; letter-spacing: .5px;
 }
 .run-btn:hover { filter: brightness(1.08); }
-.run-btn:disabled { opacity: .55; cursor: default; filter: none; }
+.run-btn:disabled { opacity: .7; cursor: default; filter: none; }
+.stop-btn {
+  background: var(--down); color: #2b0606; border: 0; font-weight: 700;
+  padding: 10px 22px; border-radius: 8px; cursor: pointer; font-size: 13px; letter-spacing: .5px;
+}
+.stop-btn:hover { filter: brightness(1.08); }
+.stop-btn:disabled { opacity: .55; cursor: default; }
+.stop-btn.hidden { display: none; }
 #runnerMsg.ok { color: var(--up); } #runnerMsg.err { color: var(--down); }
 
 .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 20px; }

@@ -46,11 +46,13 @@ services:
       NTM_PLATFORM_URL: "https://platform:8443"
       NTM_INSTALL_TOKEN: "${NTM_INSTALL_TOKEN:-ntm-install-demo-token}"
       NTM_AGENT_NAME: "agent-lab-01"
-      # Default scans the private RFC1918 ranges. For this containerized demo the
-      # agent discovers the compose network so you can see the pipeline end-to-end.
-      NTM_RANGES: "${NTM_RANGES:-172.28.0.0/24}"
-      NTM_SCAN_INTERVAL: "${NTM_SCAN_INTERVAL:-10m}"
+      # Scans the three private RFC1918 ranges (the lab network 172.28.0.0/24
+      # falls inside 172.16.0.0/12, so you see real discovery end-to-end).
+      NTM_RANGES: "${NTM_RANGES:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
+      NTM_SCAN_INTERVAL: "${NTM_SCAN_INTERVAL:-30m}"
       NTM_TLS_INSECURE: "true"   # self-signed platform cert in the lab
+      # Phase 1: fast host discovery (ping sweep). Phase 2 only scans live hosts.
+      NTM_DISCOVERY_FLAGS: "${NTM_DISCOVERY_FLAGS:--sn -n -T4 --min-rate 20000 --max-retries 1 --host-timeout 300ms}"
       NTM_NMAP_FLAGS: "-sT -sV --top-ports 100 --open -T4 -n"
     volumes:
       - ntm-agent-state:/var/lib/ntm

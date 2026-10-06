@@ -31,10 +31,12 @@ func (s *Server) Routes(web http.Handler) http.Handler {
 	mux.HandleFunc("POST /api/v1/enroll", s.handleEnroll)
 	mux.HandleFunc("POST /api/v1/scan-results", s.authAgent(s.handleScanResults))
 	mux.HandleFunc("GET /api/v1/agent/commands", s.authAgent(s.handleCommands))
+	mux.HandleFunc("POST /api/v1/agent/status", s.authAgent(s.handleAgentStatus))
 
 	// Agent management (frontend).
 	mux.HandleFunc("GET /api/v1/agents", s.handleAgents)
 	mux.HandleFunc("POST /api/v1/agents/{id}/run", s.handleRunAgent)
+	mux.HandleFunc("POST /api/v1/agents/{id}/stop", s.handleStopAgent)
 
 	// Frontend endpoints.
 	mux.HandleFunc("GET /api/v1/dashboard", s.handleDashboard)
@@ -128,12 +130,30 @@ func (s *Server) handleScanResults(w http.ResponseWriter, r *http.Request, agent
 // handleCommands lets a polling agent learn whether an on-demand scan was
 // requested for it from the UI; the request is consumed (cleared) atomically.
 func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request, agent models.Agent) {
-	run, err := s.store.ConsumeScanRequest(r.Context(), agent.ID)
+	scanNow, stopNow, err := s.store.ConsumeCommands(r.Context(), agent.ID)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "command error")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"scan_now": run})
+	writeJSON(w, http.StatusOK, map[string]any{"scan_now": scanNow, "stop_now": stopNow})
+}
+
+// handleAgentStatus lets the agent report when a scan starts so the UI reflects
+// the running state for scheduled and startup scans too (not just on-demand).
+func (s *Server) handleAgentStatus(w http.ResponseWriter, r *http.Request, agent models.Agent) {
+	var body struct {
+		State string `json:"state"` // running | idle
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if body.State == "running" {
+		s.store.SetRunning(r.Context(), agent.ID)
+	} else {
+		s.store.MarkScanDone(r.Context(), agent.ID)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // --- Agent management (frontend) ---
@@ -164,6 +184,22 @@ func (s *Server) handleRunAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"queued": true, "agent_id": id})
+}
+
+func (s *Server) handleStopAgent(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	if err := s.store.RequestStop(r.Context(), id); errors.Is(err, db.ErrNotFound) {
+		httpError(w, http.StatusNotFound, "agent not found")
+		return
+	} else if err != nil {
+		httpError(w, http.StatusInternalServerError, "could not request stop")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"stopping": true, "agent_id": id})
 }
 
 // --- Frontend endpoints ---

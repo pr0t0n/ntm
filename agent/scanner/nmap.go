@@ -143,6 +143,48 @@ func DefaultFlags(override string) []string {
 	return []string{"-sT", "-sV", "--top-ports", "100", "--open", "-T4", "-n"}
 }
 
+// Discover runs a fast host-discovery (ping) sweep over the targets and returns
+// the IPs that are up. Scanning only live hosts afterward is what makes large
+// ranges (e.g. 10.0.0.0/8, 172.16.0.0/12) tractable.
+func Discover(ctx context.Context, binary string, flags []string, targets []string) ([]string, error) {
+	if binary == "" {
+		binary = "nmap"
+	}
+	args := append([]string{}, flags...)
+	args = append(args, "-oX", "-")
+	args = append(args, targets...)
+
+	cmd := exec.CommandContext(ctx, binary, args...)
+	out, err := cmd.Output()
+	if err != nil && len(out) == 0 {
+		return nil, fmt.Errorf("nmap discovery: %w", err)
+	}
+	var run nmapRun
+	if err := xml.Unmarshal(out, &run); err != nil {
+		return nil, fmt.Errorf("parse discovery xml: %w", err)
+	}
+	var live []string
+	for _, h := range run.Hosts {
+		if h.Status.State != "up" {
+			continue
+		}
+		for _, a := range h.Addresses {
+			if a.Type == "ipv4" || a.Type == "ipv6" {
+				live = append(live, a.Addr)
+			}
+		}
+	}
+	return live, nil
+}
+
+// DiscoveryFlags returns the nmap flags for the ping-sweep phase.
+func DiscoveryFlags(override string) []string {
+	if strings.TrimSpace(override) != "" {
+		return strings.Fields(override)
+	}
+	return []string{"-sn", "-n", "-T4", "--min-rate", "1000"}
+}
+
 // TopPortsNote documents the ports covered by --top-ports 100 (informational).
 func TopPortsNote() string {
 	common := []int{20, 21, 22, 23, 25, 53, 80, 110, 111, 135, 137, 138, 139, 143,

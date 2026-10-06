@@ -13,6 +13,8 @@ type Agent struct {
 	LastSeen      time.Time `json:"last_seen"`
 	LastScanAt    time.Time `json:"last_scan_at"`
 	ScanRequested bool      `json:"scan_requested"`
+	ScanState     string    `json:"scan_state"` // idle | running
+	ScanStartedAt time.Time `json:"scan_started_at"`
 	Online        bool      `json:"online"`
 	CreatedAt     time.Time `json:"created_at"`
 }

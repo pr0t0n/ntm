@@ -93,6 +93,24 @@ func uploadReport(client *http.Client, cfg agentConfig, state agentState, rep sc
 	return nil
 }
 
+// reportStatus notifies the platform of a scan state change (running | idle) so
+// the UI can show the running state and elapsed time. Best-effort; errors are
+// non-fatal because the eventual report upload also resets state.
+func reportStatus(client *http.Client, cfg agentConfig, state agentState, st string) {
+	body, _ := json.Marshal(map[string]string{"state": st})
+	req, err := http.NewRequest(http.MethodPost, cfg.PlatformURL+"/api/v1/agent/status", bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+state.AgentToken)
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	resp.Body.Close()
+}
+
 // --- state persistence ---
 
 func readState(path string) (agentState, bool) {
