@@ -205,9 +205,10 @@ func (s *Store) RequestScan(ctx context.Context, id int64) error {
 	return nil
 }
 
-// RequestStop flags a running scan to be aborted on the agent's next poll.
+// RequestStop flags a running scan to be aborted on the agent's next poll and
+// cancels any still-pending run request.
 func (s *Store) RequestStop(ctx context.Context, id int64) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE agents SET stop_requested=true WHERE id=$1`, id)
+	tag, err := s.pool.Exec(ctx, `UPDATE agents SET stop_requested=true, scan_requested=false WHERE id=$1`, id)
 	if err != nil {
 		return err
 	}

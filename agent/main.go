@@ -41,9 +41,9 @@ func loadConfig() agentConfig {
 	if err != nil {
 		interval = 30 * time.Minute
 	}
-	poll, err := time.ParseDuration(env("NTM_POLL_INTERVAL", "15s"))
+	poll, err := time.ParseDuration(env("NTM_POLL_INTERVAL", "5s"))
 	if err != nil {
-		poll = 15 * time.Second
+		poll = 5 * time.Second
 	}
 	return agentConfig{
 		PlatformURL:  strings.TrimRight(env("NTM_PLATFORM_URL", "https://localhost:8443"), "/"),

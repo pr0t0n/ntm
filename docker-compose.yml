@@ -50,6 +50,7 @@ services:
       # falls inside 172.16.0.0/12, so you see real discovery end-to-end).
       NTM_RANGES: "${NTM_RANGES:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}"
       NTM_SCAN_INTERVAL: "${NTM_SCAN_INTERVAL:-30m}"
+      NTM_POLL_INTERVAL: "${NTM_POLL_INTERVAL:-5s}"  # how fast on-demand runs/stops are picked up
       NTM_TLS_INSECURE: "true"   # self-signed platform cert in the lab
       # Phase 1: fast host discovery (ping sweep). Phase 2 only scans live hosts.
       NTM_DISCOVERY_FLAGS: "${NTM_DISCOVERY_FLAGS:--sn -n -T4 --min-rate 20000 --max-retries 1 --host-timeout 300ms}"

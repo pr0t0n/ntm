@@ -92,17 +92,29 @@ async function loadAgents() {
   ensurePolling();
 }
 
+// localPending tracks agents the user just asked to run, so the UI shows a
+// pending state immediately (and across refresh the server's scan_requested
+// flag keeps it) until the agent actually starts.
+const localPending = {};
+
 // updateRunnerUI reflects the selected agent's run state on the buttons/labels.
+// It survives page refresh because it reads authoritative state from the server
+// (scan_state = running, scan_requested = pending).
 function updateRunnerUI() {
   const sel = document.getElementById("agentSelect");
   const runBtn = document.getElementById("runBtn");
   const stopBtn = document.getElementById("stopBtn");
   const msg = document.getElementById("runnerMsg");
   const a = agentsById[sel.value];
-  const running = a && a.scan_state === "running";
+  if (!a) { runBtn.textContent = "▶ RODAR"; runBtn.disabled = false; stopBtn.classList.add("hidden"); return; }
 
-  stopBtn.classList.toggle("hidden", !running);
-  runBtn.disabled = !!running;
+  const running = a.scan_state === "running";
+  const pending = !running && (a.scan_requested || localPending[a.id]);
+  if (running) delete localPending[a.id]; // started — drop the optimistic flag
+
+  stopBtn.classList.toggle("hidden", !(running || pending));
+  runBtn.disabled = running || pending;
+
   if (running) {
     const started = a.scan_started_at && !a.scan_started_at.startsWith("0001")
       ? new Date(a.scan_started_at) : null;
@@ -110,8 +122,12 @@ function updateRunnerUI() {
     const since = started ? started.toLocaleTimeString("pt-BR") : "—";
     runBtn.textContent = `⏳ Executando ${elapsed}`;
     setMsg(msg, `Iniciado às ${since}`, "ok");
+  } else if (pending) {
+    runBtn.textContent = "⏳ Aguardando início…";
+    setMsg(msg, "Scan solicitado — o agente inicia no próximo ciclo.", "ok");
   } else {
     runBtn.textContent = "▶ RODAR";
+    if (msg.textContent.startsWith("Iniciado") || msg.textContent.startsWith("Scan solicitado")) setMsg(msg, "", "");
   }
 }
 
@@ -134,21 +150,21 @@ async function runAgent() {
   const id = sel.value;
   const msg = document.getElementById("runnerMsg");
   if (!id) { setMsg(msg, "Selecione um agente.", "err"); return; }
-  document.getElementById("runBtn").disabled = true;
-  setMsg(msg, "Enfileirando…", "");
+  localPending[id] = true;         // optimistic: show pending at once
+  updateRunnerUI();
   try {
     const r = await fetch(`${API}/agents/${id}/run`, { method: "POST" });
     if (!r.ok) throw new Error(await r.text());
-    setMsg(msg, "✓ Análise solicitada — iniciando…", "ok");
-    setTimeout(loadAgents, 1200);
+    loadAgents();
     // Refresh inventory once the agent has had time to scan and report.
     setTimeout(() => {
       if (document.querySelector(".nav-item.active").dataset.view === "dashboard") loadDashboard();
     }, 20000);
   } catch (e) {
     console.error(e);
+    delete localPending[id];
     setMsg(msg, "Falha ao solicitar análise.", "err");
-    document.getElementById("runBtn").disabled = false;
+    updateRunnerUI();
   }
 }
 
@@ -157,12 +173,13 @@ async function stopAgent() {
   const msg = document.getElementById("runnerMsg");
   if (!id) return;
   document.getElementById("stopBtn").disabled = true;
+  delete localPending[id];
   setMsg(msg, "Interrompendo scan…", "err");
   try {
     const r = await fetch(`${API}/agents/${id}/stop`, { method: "POST" });
     if (!r.ok) throw new Error(await r.text());
     setMsg(msg, "⏹ Parada solicitada — encerrando o nmap.", "err");
-    setTimeout(loadAgents, 1500);
+    setTimeout(loadAgents, 1000);
   } catch (e) {
     console.error(e);
     setMsg(msg, "Falha ao interromper.", "err");
