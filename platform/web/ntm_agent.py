@@ -146,9 +146,12 @@ class Platform:
         write_state(self.cfg.state_path, out)
         return out["agent_id"]
 
-    def status(self, state, phase=""):
+    def status(self, state, phase="", scan_range=""):
+        body = {"state": state, "phase": phase, "ip": local_ip()}
+        if scan_range:
+            body["range"] = scan_range
         try:
-            self._do("POST", "/api/v1/agent/status", {"state": state, "phase": phase, "ip": local_ip()})
+            self._do("POST", "/api/v1/agent/status", body)
         except Exception:
             pass  # best-effort; the phase uploads also move the UI
 
@@ -418,7 +421,7 @@ PHASE_BATCH = 64
 def run_scan(cfg, plat, stop, ranges=None):
     ranges = ranges or cfg.ranges
     start = time.time()
-    plat.status("running", "ping")
+    plat.status("running", "ping", ",".join(ranges))
 
     # Phase 1 — native ICMP ping. nmap is never run here or during the sweep.
     log("phase 1/4 ping: ICMP echo to %s at %d/s" % (" ".join(ranges), cfg.ping_rate))

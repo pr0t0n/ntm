@@ -171,6 +171,8 @@ function updateScanProgress(a) {
     li.classList.toggle("done", current >= 0 && i < current);
     li.classList.toggle("active", i === current);
   });
+  const rng = a.scan_range || (a.ranges || []).join(", ");
+  setText("spRange", rng || "—");
   setText("spTotal", hasTime(a.scan_started_at) ? fmtElapsed(Date.now() - new Date(a.scan_started_at)) : "—");
   setText("spPhase", hasTime(a.phase_started_at) ? fmtElapsed(Date.now() - new Date(a.phase_started_at)) : "—");
   setText("spHosts", (a.scan_hosts || 0).toLocaleString("pt-BR"));
@@ -313,7 +315,13 @@ function fillRecent(hosts) {
 
 // ---- CMDB ----
 document.getElementById("searchBtn").addEventListener("click", search);
+document.getElementById("cmdbPrev").addEventListener("click", () => cmdbGoto(-1));
+document.getElementById("cmdbNext").addEventListener("click", () => cmdbGoto(1));
 document.getElementById("searchInput").addEventListener("keydown", e => { if (e.key === "Enter") search(); });
+
+const PAGE_SIZE = 10;
+let cmdbHosts = [];   // full result set of the last search
+let cmdbPage = 0;     // current zero-based page
 
 async function search() {
   const field = document.getElementById("searchField").value;
@@ -322,8 +330,19 @@ async function search() {
   try { res = await getJSON(`${API}/hosts?field=${encodeURIComponent(field)}&q=${encodeURIComponent(q)}`); }
   catch (e) { console.error(e); return; }
   setText("searchCount", `${res.count} ativo(s)`);
+  cmdbHosts = res.hosts || [];
+  cmdbPage = 0;
+  renderCmdbPage();
+}
+
+// renderCmdbPage shows PAGE_SIZE rows of the current result set and drives the
+// pager, so a large inventory is browsed 10 at a time instead of all at once.
+function renderCmdbPage() {
   const body = document.getElementById("cmdbBody");
-  body.innerHTML = (res.hosts || []).map(h => {
+  const pages = Math.max(1, Math.ceil(cmdbHosts.length / PAGE_SIZE));
+  cmdbPage = Math.min(Math.max(0, cmdbPage), pages - 1);
+  const slice = cmdbHosts.slice(cmdbPage * PAGE_SIZE, cmdbPage * PAGE_SIZE + PAGE_SIZE);
+  body.innerHTML = slice.map(h => {
     const apps = (h.ports || []).slice(0, 8).map(p =>
       `<span class="chip">${p.port}${p.service ? "/" + esc(p.service) : ""}</span>`).join("") || "—";
     const vendor = h.mac ? `${esc(h.mac)}${h.vendor ? " · " + esc(h.vendor) : ""}` : "—";
@@ -335,7 +354,17 @@ async function search() {
 
   body.querySelectorAll("tr[data-id]").forEach(tr =>
     tr.addEventListener("click", () => showHost(tr.dataset.id)));
+
+  const pager = document.getElementById("cmdbPager");
+  pager.classList.toggle("hidden", cmdbHosts.length <= PAGE_SIZE);
+  const from = cmdbHosts.length ? cmdbPage * PAGE_SIZE + 1 : 0;
+  const to = Math.min(cmdbHosts.length, (cmdbPage + 1) * PAGE_SIZE);
+  setText("cmdbPageInfo", `${from}–${to} de ${cmdbHosts.length}  ·  página ${cmdbPage + 1}/${pages}`);
+  document.getElementById("cmdbPrev").disabled = cmdbPage === 0;
+  document.getElementById("cmdbNext").disabled = cmdbPage >= pages - 1;
 }
+
+function cmdbGoto(delta) { cmdbPage += delta; renderCmdbPage(); }
 
 // Wipes the whole inventory on the platform (hosts, ports, DNS). Agents stay
 // enrolled and repopulate the base on their next scan.

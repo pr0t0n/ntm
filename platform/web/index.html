@@ -112,10 +112,17 @@
           <button id="resetBtn" class="reset-btn" title="Apaga todos os ativos, portas e registros DNS">⟲ RESET</button>
         </div>
         <div class="card nopad">
-          <table class="tbl cmdb">
-            <thead><tr><th>IP</th><th>Hostname</th><th>Tipo</th><th>SO</th><th>MAC / Vendor</th><th>Portas / Apps</th><th>Status</th></tr></thead>
-            <tbody id="cmdbBody"></tbody>
-          </table>
+          <div class="tbl-scroll">
+            <table class="tbl cmdb">
+              <thead><tr><th>IP</th><th>Hostname</th><th>Tipo</th><th>SO</th><th>MAC / Vendor</th><th>Portas / Apps</th><th>Status</th></tr></thead>
+              <tbody id="cmdbBody"></tbody>
+            </table>
+          </div>
+          <div id="cmdbPager" class="pager hidden">
+            <button id="cmdbPrev" class="pager-btn">‹ Anterior</button>
+            <span id="cmdbPageInfo" class="pager-info">—</span>
+            <button id="cmdbNext" class="pager-btn">Próximo ›</button>
+          </div>
         </div>
       </section>
 
@@ -153,6 +160,7 @@
             <span id="runnerMsg" class="muted"></span>
           </div>
           <div id="scanProgress" class="scan-progress hidden">
+            <div class="scan-range-line">Varrendo <span id="spRange">—</span></div>
             <ol class="phases">
               <li data-phase="ping"><span class="num">1</span>Ping</li>
               <li data-phase="hostname"><span class="num">2</span>Hostname</li>

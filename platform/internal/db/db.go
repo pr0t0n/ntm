@@ -167,6 +167,12 @@ func (s *Store) SetAgentIP(ctx context.Context, id int64, ip string) {
 	_, _ = s.pool.Exec(ctx, `UPDATE agents SET ip=$2 WHERE id=$1`, id, ip)
 }
 
+// SetScanRange records the range(s) the current scan is covering, reported by
+// the agent when the scan starts, so the UI can show what is being scanned.
+func (s *Store) SetScanRange(ctx context.Context, id int64, r string) {
+	_, _ = s.pool.Exec(ctx, `UPDATE agents SET scan_range=$2 WHERE id=$1`, id, r)
+}
+
 // DeleteAgent removes an enrolled agent. Discovered hosts are left in place.
 func (s *Store) DeleteAgent(ctx context.Context, id int64) error {
 	tag, err := s.pool.Exec(ctx, `DELETE FROM agents WHERE id=$1`, id)

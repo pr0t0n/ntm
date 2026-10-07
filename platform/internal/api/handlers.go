@@ -218,12 +218,16 @@ func (s *Server) handleAgentStatus(w http.ResponseWriter, r *http.Request, agent
 		State string `json:"state"` // running | idle
 		Phase string `json:"phase"` // ping | hostname | ports | detect (while running)
 		IP    string `json:"ip"`    // agent's self-reported primary IP
+		Range string `json:"range"` // the range(s) this scan is actually covering
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	s.store.SetAgentIP(r.Context(), agent.ID, pickIP(body.IP, r))
+	if body.Range != "" {
+		s.store.SetScanRange(r.Context(), agent.ID, body.Range)
+	}
 	if body.State == "running" && body.Phase != "" {
 		s.store.SetPhase(r.Context(), agent.ID, body.Phase)
 	} else if body.State == "running" {
