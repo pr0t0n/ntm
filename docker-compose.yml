@@ -60,6 +60,9 @@ services:
       NTM_PING_TIMEOUT: "${NTM_PING_TIMEOUT:-2s}"         # wait for late replies
       NTM_PORT_WORKERS: "${NTM_PORT_WORKERS:-200}"        # concurrent TCP connect probes
       NTM_CONNECT_TIMEOUT: "${NTM_CONNECT_TIMEOUT:-1.0}"  # per-port connect timeout (s)
+      # Never inventory the Docker infra network (platform, db, gateway); the
+      # agent and the platform are always excluded on top of this.
+      NTM_EXCLUDE: "${NTM_EXCLUDE:-172.28.0.0/16}"
     volumes:
       - ntm-agent-state:/var/lib/ntm
     networks:

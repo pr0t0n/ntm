@@ -117,8 +117,10 @@ Logs: `journalctl -u ntm-agent -f`.
 **Agente:** `NTM_PLATFORM_URL`, `NTM_INSTALL_TOKEN`, `NTM_RANGES`,
 `NTM_SCAN_INTERVAL`, `NTM_DNS_RESOLVER`, `NTM_TLS_INSECURE`, `NTM_STATE_PATH`,
 `NTM_AGENT_NAME`, o ping da fase 1 (`NTM_PING_RATE`, pacotes/s, padrão 1000;
-`NTM_PING_TIMEOUT`, padrão 2s) e as flags do nmap por fase: `NTM_PORT_FLAGS`
-(fase 3, portas) e `NTM_DETECT_FLAGS` (fase 4, SO e plataformas).
+`NTM_PING_TIMEOUT`, padrão 2s), o port scan em Python (`NTM_PORT_WORKERS`,
+`NTM_CONNECT_TIMEOUT`) e `NTM_EXCLUDE` (redes/IPs a nunca inventariar, CIDR
+separado por vírgula). O agente e a plataforma são sempre excluídos; no compose
+o default de `NTM_EXCLUDE` é a rede do Docker (`172.28.0.0/16`).
 
 ## Resolução de problemas
 

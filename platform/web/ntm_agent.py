@@ -55,6 +55,42 @@ def env(key, default=""):
     return v if v != "" else default
 
 
+def build_excludes(cfg):
+    """Networks to skip: NTM_EXCLUDE plus the agent's own host and the platform
+    (NTM infrastructure must not show up as discovered assets)."""
+    nets = []
+    for c in cfg.exclude:
+        try:
+            nets.append(ipaddress.ip_network(c, strict=False))
+        except ValueError:
+            log("ignoring invalid NTM_EXCLUDE entry: %s" % c)
+    for ip in (local_ip(), platform_ip(cfg)):
+        if ip:
+            try:
+                nets.append(ipaddress.ip_network(ip + "/32"))
+            except ValueError:
+                pass
+    return nets
+
+
+def is_excluded(ip, nets):
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(addr in n for n in nets)
+
+
+def platform_ip(cfg):
+    """Resolve the platform host (from NTM_PLATFORM_URL) to an IP, so the agent
+    never inventories the platform it reports to."""
+    try:
+        host = cfg.platform_url.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0]
+        return socket.gethostbyname(host)
+    except (OSError, IndexError):
+        return ""
+
+
 def local_ip():
     """Best-effort primary IPv4 of this host (the interface used for outbound
     traffic). Reported to the platform so the UI can suggest a scan range."""
@@ -83,6 +119,9 @@ class Config:
         self.resolver = env("NTM_DNS_RESOLVER", "")
         self.port_workers = max(1, int(env("NTM_PORT_WORKERS", "200")))
         self.connect_timeout = float(env("NTM_CONNECT_TIMEOUT", "1.0"))
+        # Networks/IPs to never inventory (e.g. the Docker infra network). The
+        # agent's own host and the platform are always excluded on top of this.
+        self.exclude = [r.strip() for r in env("NTM_EXCLUDE", "").split(",") if r.strip()]
 
 
 def parse_duration(s, default):
@@ -204,7 +243,8 @@ def echo_request(ident, seq):
     return struct.pack("!BBHHH", 8, 0, icmp_checksum(hdr + payload), ident, seq) + payload
 
 
-def ping_sweep(cfg, ranges, stop, on_batch):
+def ping_sweep(cfg, ranges, stop, on_batch, exclude_nets=None):
+    exclude_nets = exclude_nets or []
     """Send one ICMP echo to every host address of the ranges, streaming the
     hosts that reply (with their TTL, used later for OS detection) to on_batch.
     Returns {ip: ttl}. Requires a raw socket (root / CAP_NET_RAW)."""
@@ -238,7 +278,7 @@ def ping_sweep(cfg, ranges, stop, on_batch):
                     continue
                 if struct.unpack("!H", pkt[ihl + 4:ihl + 6])[0] != ident:
                     continue
-                if ip in ttl_by_ip:
+                if ip in ttl_by_ip or is_excluded(ip, exclude_nets):
                     continue
                 ttl = pkt[8]
                 ttl_by_ip[ip] = ttl
@@ -424,6 +464,9 @@ def run_scan(cfg, plat, stop, ranges=None):
     plat.status("running", "ping", ",".join(ranges))
 
     # Phase 1 — native ICMP ping. nmap is never run here or during the sweep.
+    exclude_nets = build_excludes(cfg)
+    if exclude_nets:
+        log("excluding from inventory: %s" % ", ".join(str(n) for n in exclude_nets))
     log("phase 1/4 ping: ICMP echo to %s at %d/s" % (" ".join(ranges), cfg.ping_rate))
     live = []
 
@@ -432,7 +475,7 @@ def run_scan(cfg, plat, stop, ranges=None):
         live.extend(h["ip"] for h in batch)
         log("phase 1/4 ping: %d live host(s) stored so far" % len(live))
 
-    ttl_by_ip = ping_sweep(cfg, ranges, stop, on_ping)
+    ttl_by_ip = ping_sweep(cfg, ranges, stop, on_ping, exclude_nets)
     if stop.is_set():
         log("scan stopped during ping — stored hosts are kept")
         plat.status("idle")
