@@ -254,6 +254,12 @@ function dash() {
   const bars = nw.map((v, i) => ({ x: (X(i) - 5).toFixed(1), w: 10, h: (v / maxNew * 46).toFixed(1), y: (180 - v / maxNew * 46).toFixed(1) }));
   const subnets = SUBNETS.map(sn => { const l = sn.list, ports = l.reduce((n, a) => n + a.portCount, 0); const svc = new Set(); l.forEach(a => a.ports.forEach(p => svc.add(p.service || p.product || p.port))); const maxC = Math.max(1, ...SUBNETS.map(x => x.list.length)); return { id: sn.id, name: sn.name, cidr: sn.cidr, count: l.length, w: Math.round(l.length / maxC * 100), ports, services: svc.size }; });
   const recent = [...assets].sort((a, b) => a.seenMin - b.seenMin).slice(0, 6).map(a => ({ id: a.id, icon: a.icon, tone: "var(--color-accent-400)", title: a.host, sub: `${a.type} · ${a.os} · ${a.ip}`, when: fmtSeen(a.seenMin) }));
+  const SENS = { 3389: "RDP · área de trabalho remota", 23: "Telnet", 21: "FTP", 445: "SMB · compartilhamento", 139: "NetBIOS", 5900: "VNC", 5985: "WinRM", 3306: "MySQL", 5432: "PostgreSQL", 1433: "MS-SQL", 27017: "MongoDB", 6379: "Redis", 9200: "Elasticsearch", 2375: "Docker API", 2049: "NFS" };
+  const expCount = {};
+  assets.forEach(a => { const seen = new Set(); a.ports.forEach(p => { if (SENS[p.port] && !seen.has(p.port)) { seen.add(p.port); expCount[p.port] = (expCount[p.port] || 0) + 1; } }); });
+  const exposure = Object.entries(expCount).map(([port, count]) => ({ port: +port, name: SENS[port], count })).sort((a, b) => b.count - a.count);
+  const tagCount = {}; assets.forEach(a => (a.tags || []).forEach(t => tagCount[t] = (tagCount[t] || 0) + 1));
+  const tagList = Object.entries(tagCount).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }));
   return {
     summary: `${assets.length} ativos mapeados em ${SUBNETS.length} sub-rede(s), com ${totalPorts} portas abertas em ${svcSorted.length} serviço(s) distinto(s).`,
     kpis: [
@@ -265,7 +271,7 @@ function dash() {
     families, osList, osVersions: osSorted.length, types, typeCount: types.length,
     services, svcCount: svcSorted.length,
     line, area: line + " L600,180 L0,180 Z", bars, trendMax: mx, trendMin: mn, d0: dayLabel(29), d15: dayLabel(15),
-    subnets, recent,
+    subnets, recent, exposure, tagList,
   };
 }
 
@@ -340,6 +346,22 @@ function viewDash() {
             <span style="font-size:15px;font-weight:500">${t.count}</span>
           </button>`).join("")}
         </div>
+      </section>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:14px">
+      <section style="${card.replace("gap:14px", "gap:10px")}">
+        <div style="display:flex;align-items:baseline;gap:10px"><h4 style="margin:0;font-size:16px">Exposição de serviços</h4><span style="font-size:12px;color:var(--color-neutral-500)">serviços sensíveis acessíveis na rede</span></div>
+        ${d.exposure.length ? `<div style="display:flex;flex-direction:column;gap:2px">${d.exposure.map(e => `<button onclick='App.filterTo({"search":${JSON.stringify(String(e.port))}})' style="display:flex;align-items:center;gap:10px;padding:8px 6px;border:0;color:var(--color-text);font:inherit;cursor:pointer;text-align:left;background:linear-gradient(to right,transparent,color-mix(in srgb,var(--color-text) 8%,transparent) 48px,color-mix(in srgb,var(--color-text) 8%,transparent) calc(100% - 48px),transparent) no-repeat bottom/100% 1px">
+          <span style="font-size:11px;font-family:ui-monospace,monospace;color:var(--color-neutral-400);min-width:48px">:${e.port}</span>
+          <span style="flex:1;font-size:12.5px">${esc(e.name)}</span>
+          <span style="font-size:14px;font-weight:500">${e.count}</span>
+          <span style="font-size:11px;color:var(--color-neutral-500)">host(s)</span>
+        </button>`).join("")}</div>` : `<span style="font-size:13px;color:var(--color-neutral-500);padding:8px 0">Nenhum serviço sensível exposto nos ativos descobertos.</span>`}
+      </section>
+      <section style="${card.replace("gap:14px", "gap:10px")}">
+        <div style="display:flex;align-items:baseline;gap:10px"><h4 style="margin:0;font-size:16px">Tags</h4><span style="font-size:12px;color:var(--color-neutral-500)">classificação manual dos ativos</span></div>
+        ${d.tagList.length ? `<div style="display:flex;flex-wrap:wrap;gap:8px">${d.tagList.map(t => `<button onclick='App.filterTo({"fTag":${JSON.stringify(t.name)}})' style="display:flex;align-items:center;gap:7px;padding:7px 12px;border-radius:999px;border:1px solid var(--color-accent-700);background:var(--color-accent-900);color:var(--color-accent-100);font:inherit;font-size:12.5px;cursor:pointer">${esc(t.name)}<span style="color:var(--color-accent-300)">${t.count}</span></button>`).join("")}</div>` : `<span style="font-size:13px;color:var(--color-neutral-500);padding:8px 0">Sem tags ainda. Abra um ativo no CMDB e adicione tags no drawer.</span>`}
       </section>
     </div>
 
