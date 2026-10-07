@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -662,11 +663,11 @@ func (s *Store) Dashboard(ctx context.Context) (models.DashboardStats, error) {
 	_ = s.pool.QueryRow(ctx, `SELECT count(*) FROM ports WHERE state='open'`).Scan(&d.OpenPorts)
 	d.Agents, _ = s.CountAgents(ctx)
 
+	// All hosts (most-recent first) so the dashboard list can paginate over the
+	// full inventory instead of a truncated preview.
 	recent, err := s.SearchHosts(ctx, "all", "")
 	if err == nil {
-		if len(recent) > 8 {
-			recent = recent[:8]
-		}
+		sort.Slice(recent, func(i, j int) bool { return recent[i].LastSeen.After(recent[j].LastSeen) })
 		d.Recent = recent
 	}
 	return d, nil

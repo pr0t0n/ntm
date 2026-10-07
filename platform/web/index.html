@@ -67,12 +67,19 @@
           </div>
         </div>
 
-        <div class="card">
-          <h3>Ativos recentes</h3>
-          <table class="tbl" id="recentTable">
-            <thead><tr><th>IP</th><th>Hostname</th><th>Tipo</th><th>SO</th><th>Status</th></tr></thead>
-            <tbody></tbody>
-          </table>
+        <div class="card nopad">
+          <h3 style="padding:18px 18px 0">Ativos</h3>
+          <div class="tbl-scroll">
+            <table class="tbl" id="recentTable">
+              <thead><tr><th>IP</th><th>Hostname</th><th>Tipo</th><th>SO</th><th>Status</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div id="recentPager" class="pager hidden">
+            <button id="recentPrev" class="pager-btn">‹ Anterior</button>
+            <span id="recentPageInfo" class="pager-info">—</span>
+            <button id="recentNext" class="pager-btn">Próximo ›</button>
+          </div>
         </div>
       </section>
 

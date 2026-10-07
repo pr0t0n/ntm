@@ -7,6 +7,7 @@ const PALETTE = {
 };
 const OS_COLORS = ["#4f9cf9", "#bc8cff", "#f0a04b", "#3fb950", "#f778ba", "#56d4dd", "#6e7b8c"];
 const charts = {};
+let lastChartSig = null;
 let cy = null;
 
 async function getJSON(url) {
@@ -51,9 +52,15 @@ async function loadDashboard() {
   setText("agentStatus", `${d.agents || 0} agente(s) ativo(s)`);
 
   // Charts are isolated so a rendering failure never blocks the table below.
-  safe(() => drawDoughnut("chartAssets", t, k => PALETTE[k] || PALETTE.unknown, labelAsset));
-  safe(() => drawDoughnut("chartOS", d.by_os || {}, (k, i) => OS_COLORS[i % OS_COLORS.length], k => k));
-  safe(() => drawApps(d.top_apps || []));
+  // They are only redrawn when their data actually changes, so a periodic
+  // refresh does not make them flicker by destroying/recreating identical charts.
+  const sig = JSON.stringify([t, d.by_os || {}, d.top_apps || []]);
+  if (sig !== lastChartSig) {
+    lastChartSig = sig;
+    safe(() => drawDoughnut("chartAssets", t, k => PALETTE[k] || PALETTE.unknown, labelAsset));
+    safe(() => drawDoughnut("chartOS", d.by_os || {}, (k, i) => OS_COLORS[i % OS_COLORS.length], k => k));
+    safe(() => drawApps(d.top_apps || []));
+  }
   fillRecent(d.recent || []);
   ensurePolling();
 }
@@ -208,11 +215,14 @@ function fmtElapsed(ms) {
 // ensurePolling keeps the runner live: a 1s ticker updates the elapsed label and
 // every 4s we refresh agent state from the server (only while on the dashboard).
 function ensurePolling() {
-  if (!runnerTimer) runnerTimer = setInterval(updateRunnerUI, 1000);
+  // Refresh only the Varredura view live (runner + phase progress). The
+  // dashboard is a snapshot refreshed on entry and via the "Atualizar" button,
+  // so its charts never flicker from a periodic rebuild.
+  if (!runnerTimer) runnerTimer = setInterval(() => {
+    if (document.querySelector(".nav-item.active").dataset.view === "scan") updateRunnerUI();
+  }, 1000);
   if (!agentsPoll) agentsPoll = setInterval(() => {
-    const v = document.querySelector(".nav-item.active").dataset.view;
-    if (v === "scan") loadAgents();
-    else if (v === "dashboard") loadDashboard();
+    if (document.querySelector(".nav-item.active").dataset.view === "scan") loadAgents();
   }, 4000);
 }
 
@@ -304,19 +314,40 @@ function render(id, cfg) {
   charts[id] = new Chart(document.getElementById(id), cfg);
 }
 
+let recentHosts = [];   // full host list for the dashboard table
+let recentPage = 0;
+
 function fillRecent(hosts) {
+  recentHosts = hosts;
+  renderRecentPage();
+}
+
+function renderRecentPage() {
   const tb = document.querySelector("#recentTable tbody");
-  tb.innerHTML = hosts.map(h => `
+  const pages = Math.max(1, Math.ceil(recentHosts.length / PAGE_SIZE));
+  recentPage = Math.min(Math.max(0, recentPage), pages - 1);
+  const slice = recentHosts.slice(recentPage * PAGE_SIZE, recentPage * PAGE_SIZE + PAGE_SIZE);
+  tb.innerHTML = slice.map(h => `
     <tr><td>${esc(h.ip)}</td><td>${esc(h.hostname) || "—"}</td>
     <td>${badge(h.asset_type)}</td><td>${esc(h.os_guess) || "—"}</td>
     <td>${statusTag(h.status)}</td></tr>`).join("") ||
-    `<tr><td colspan="5" class="muted">Nenhum ativo ainda. Instale um agente para iniciar a descoberta.</td></tr>`;
+    `<tr><td colspan="5" class="muted" style="padding:18px">Nenhum ativo ainda. Instale um agente para iniciar a descoberta.</td></tr>`;
+
+  const pager = document.getElementById("recentPager");
+  pager.classList.toggle("hidden", recentHosts.length <= PAGE_SIZE);
+  const from = recentHosts.length ? recentPage * PAGE_SIZE + 1 : 0;
+  const to = Math.min(recentHosts.length, (recentPage + 1) * PAGE_SIZE);
+  setText("recentPageInfo", `${from}–${to} de ${recentHosts.length}  ·  página ${recentPage + 1}/${pages}`);
+  document.getElementById("recentPrev").disabled = recentPage === 0;
+  document.getElementById("recentNext").disabled = recentPage >= pages - 1;
 }
 
 // ---- CMDB ----
 document.getElementById("searchBtn").addEventListener("click", search);
 document.getElementById("cmdbPrev").addEventListener("click", () => cmdbGoto(-1));
 document.getElementById("cmdbNext").addEventListener("click", () => cmdbGoto(1));
+document.getElementById("recentPrev").addEventListener("click", () => { recentPage--; renderRecentPage(); });
+document.getElementById("recentNext").addEventListener("click", () => { recentPage++; renderRecentPage(); });
 document.getElementById("searchInput").addEventListener("keydown", e => { if (e.key === "Enter") search(); });
 
 const PAGE_SIZE = 10;
