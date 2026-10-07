@@ -33,6 +33,15 @@ let ASSETS = [];
 let SUBNETS = [];
 let AGENTS = [];
 let byId = {};
+let byIP = {};
+let CHANGES = [];
+const CHANGE_KIND = {
+  host_novo: { icon: "ph-plus-circle", label: "Novo host", tone: "var(--color-accent-400)" },
+  hostname: { icon: "ph-identification-card", label: "Hostname", tone: "var(--color-accent-300)" },
+  so: { icon: "ph-desktop", label: "Sistema operacional", tone: "var(--color-accent-300)" },
+  porta_aberta: { icon: "ph-door-open", label: "Porta aberta", tone: "var(--color-accent-400)" },
+  porta_fechada: { icon: "ph-door", label: "Porta fechada", tone: "var(--color-neutral-400)" },
+};
 
 // ---- data loading: map real hosts to the design's asset shape ----
 async function getJSON(u) { const r = await fetch(u); if (!r.ok) throw new Error(r.status + " " + u); return r.json(); }
@@ -88,8 +97,9 @@ async function loadAssets() {
       cpu: "—", ports, portCount: ports.length, hostUp: h.status !== "down", app,
     };
   });
-  byId = {}; ASSETS.forEach(a => byId[a.id] = a);
+  byId = {}; byIP = {}; ASSETS.forEach(a => { byId[a.id] = a; byIP[a.ip] = a; });
   buildSubnets();
+  try { CHANGES = (await getJSON(`${API}/changes?limit=200`)).changes || []; } catch (e) { CHANGES = []; }
 }
 
 function buildSubnets() {
@@ -144,12 +154,13 @@ function dayLabel(d) { const dt = new Date(Date.now() - d * 86400000); return dt
 // ============================ RENDER ============================
 function render() {
   renderNav();
-  const titles = { dash: "Dashboard", map: "Mapa de rede", cmdb: "CMDB", scan: "Varredura" };
+  const titles = { dash: "Dashboard", map: "Mapa de rede", cmdb: "CMDB", changes: "Mudanças", scan: "Varredura" };
   document.getElementById("title").textContent = titles[state.screen];
   document.getElementById("crumb").textContent = titles[state.screen];
   const scr = document.getElementById("screen");
   scr.innerHTML = state.screen === "dash" ? viewDash()
     : state.screen === "cmdb" ? viewCmdb()
+    : state.screen === "changes" ? viewChanges()
     : state.screen === "scan" ? viewScan()
     : viewMap();
   document.getElementById("drawer").innerHTML = state.drawer ? viewDrawer() : "";
@@ -197,7 +208,8 @@ function renderNav() {
   const N = ASSETS.length;
   const running = AGENTS.some(a => a.scan_state === "running");
   const NAV = [["dash", "Dashboard", "ph-squares-four", ""], ["map", "Mapa de rede", "ph-graph", ""],
-    ["cmdb", "CMDB", "ph-database", N], ["scan", "Varredura", "ph-broadcast", running ? "●" : ""]];
+    ["cmdb", "CMDB", "ph-database", N], ["changes", "Mudanças", "ph-clock-counter-clockwise", CHANGES.length || ""],
+    ["scan", "Varredura", "ph-broadcast", running ? "●" : ""]];
   document.getElementById("nav").innerHTML = NAV.map(([id, label, icon, count]) => {
     const on = state.screen === id;
     return `<button onclick="App.go('${id}')" style="display:flex;align-items:center;gap:10px;padding:9px 10px;border:0;border-radius:var(--radius-md);background:${on ? "color-mix(in srgb,var(--color-accent) 12%,transparent)" : "transparent"};color:${on ? "var(--color-accent-300)" : "var(--color-neutral-300)"};font:inherit;font-size:14px;cursor:pointer;text-align:left;box-shadow:${on ? "inset 2px 0 0 var(--color-accent)" : "none"};width:100%">
@@ -347,13 +359,9 @@ function viewDash() {
         </table>
       </section>
       <section style="${card.replace("gap:14px", "gap:8px")}">
-        <div style="display:flex;align-items:baseline;gap:10px"><h4 style="margin:0;font-size:16px">Ativos recentes</h4><span style="font-size:12px;color:var(--color-neutral-500)">vistos nas varreduras</span></div>
+        <div style="display:flex;align-items:baseline;gap:10px"><h4 style="margin:0;font-size:16px">Mudanças recentes</h4><button class="btn btn-ghost" onclick="App.go('changes')" style="margin-left:auto;font-size:12.5px">Ver todas<i class="ph ph-arrow-right"></i></button></div>
         <div style="display:flex;flex-direction:column">
-          ${d.recent.map(c => `<div onclick="App.openDrawer('${c.id}')" style="display:flex;gap:12px;align-items:center;padding:9px 0;cursor:pointer;background:linear-gradient(to right,transparent,color-mix(in srgb,var(--color-text) 8%,transparent) 48px,color-mix(in srgb,var(--color-text) 8%,transparent) calc(100% - 48px),transparent) no-repeat bottom/100% 1px">
-            <div style="width:30px;height:30px;flex:none;border-radius:var(--radius-md);display:grid;place-items:center;background:var(--color-bg);color:${c.tone}"><i class="ph ${c.icon}"></i></div>
-            <div style="flex:1;min-width:0;display:flex;flex-direction:column"><span style="font-size:13px">${esc(c.title)}</span><span style="font-size:12px;color:var(--color-neutral-500)">${esc(c.sub)}</span></div>
-            <span style="font-size:11.5px;color:var(--color-neutral-500);white-space:nowrap">${esc(c.when)}</span>
-          </div>`).join("") || `<span style="font-size:13px;color:var(--color-neutral-500);padding:10px 0">Nenhum ativo ainda.</span>`}
+          ${CHANGES.slice(0, 6).map(changeRow).join("") || `<span style="font-size:13px;color:var(--color-neutral-500);padding:10px 0">Nenhuma mudança registrada ainda.</span>`}
         </div>
       </section>
     </div>
@@ -435,6 +443,7 @@ function viewDrawer() {
     { title: `Portas / serviços (${a.ports.length})`, rows: portRows },
     { title: "Descoberta", rows: [{ k: "Descoberto em", v: disc }, { k: "Última vez visto", v: fmtSeen(a.seenMin) }] },
   ];
+  const hist = CHANGES.filter(c => c.host_ip === a.ip).slice(0, 12);
   const rowStyle = "display:flex;justify-content:space-between;gap:14px;padding:7px 0;font-size:13px;background:linear-gradient(to right,transparent,color-mix(in srgb,var(--color-text) 8%,transparent) 48px,color-mix(in srgb,var(--color-text) 8%,transparent) calc(100% - 48px),transparent) no-repeat bottom/100% 1px";
   return `<div onclick="App.closeDrawer()" style="position:fixed;inset:0;background:color-mix(in srgb,var(--color-neutral-900) 55%,transparent);z-index:20"></div>
     <aside style="position:fixed;top:0;right:0;bottom:0;width:440px;max-width:100%;z-index:21;background:var(--color-surface);box-shadow:var(--shadow-lg);display:flex;flex-direction:column;overflow-y:auto">
@@ -449,8 +458,12 @@ function viewDrawer() {
           <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500);margin-bottom:4px">${esc(g.title)}</div>
           ${g.rows.map(r => `<div style="${rowStyle}"><span style="color:var(--color-neutral-500)">${esc(r.k)}</span><span style="text-align:right">${esc(r.v)}</span></div>`).join("")}
         </div>`).join("")}
+        ${hist.length ? `<div style="display:flex;flex-direction:column">
+          <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500);margin-bottom:4px">Histórico</div>
+          ${hist.map(c => { const k = CHANGE_KIND[c.kind] || { icon: "ph-dot", tone: "var(--color-neutral-400)" }; return `<div style="display:flex;gap:10px;align-items:flex-start;padding:6px 0;font-size:12.5px"><i class="ph ${k.icon}" style="color:${k.tone};margin-top:2px"></i><div style="flex:1;display:flex;flex-direction:column"><span>${esc(c.detail)}</span><span style="font-size:11px;color:var(--color-neutral-500)">${new Date(c.ts).toLocaleString("pt-BR")}</span></div></div>`; }).join("")}
+        </div>` : ""}
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-primary" onclick='App.go("map",{"mapSel":${'${JSON.stringify(a.id)}'},"focus":${'${JSON.stringify(a.subnet)}'}})'><i class="ph ph-graph"></i>Ver no mapa</button>
+          <button class="btn btn-primary" onclick="App.go('map',{mapSel:'${a.id}',focus:'${esc(a.subnet)}'})"><i class="ph ph-graph"></i>Ver no mapa</button>
           <button class="btn btn-secondary" onclick="App.rescan('${a.id}')"><i class="ph ph-arrows-clockwise"></i>Revarrer host</button>
         </div>
       </div>
@@ -563,6 +576,32 @@ function viewMap() {
       </div>
       <aside style="flex:1 1 300px;min-width:280px;border-radius:var(--radius-md);background:var(--color-surface);box-shadow:var(--shadow-sm);padding:16px 18px;display:flex;flex-direction:column;gap:12px">${aside}</aside>
     </div>
+  </div>`;
+}
+
+// ---------------- MUDANÇAS ----------------
+function changeRow(c) {
+  const k = CHANGE_KIND[c.kind] || { icon: "ph-dot", label: c.kind, tone: "var(--color-neutral-400)" };
+  const a = byIP[c.host_ip];
+  const when = new Date(c.ts).toLocaleString("pt-BR");
+  return `<div ${a ? `onclick="App.openDrawer('${a.id}')" style="cursor:pointer"` : ""} style="display:flex;gap:12px;align-items:center;padding:10px 0;background:linear-gradient(to right,transparent,color-mix(in srgb,var(--color-text) 8%,transparent) 48px,color-mix(in srgb,var(--color-text) 8%,transparent) calc(100% - 48px),transparent) no-repeat bottom/100% 1px">
+    <div style="width:30px;height:30px;flex:none;border-radius:var(--radius-md);display:grid;place-items:center;background:var(--color-bg);color:${k.tone}"><i class="ph ${k.icon}"></i></div>
+    <div style="flex:1;min-width:0;display:flex;flex-direction:column"><span style="font-size:13px">${esc(c.detail)}</span><span style="font-size:12px;color:var(--color-neutral-500);font-family:ui-monospace,monospace">${esc(c.host_ip)}${a && a.hostname ? " · " + esc(a.hostname) : ""}</span></div>
+    <span style="font-size:11px;padding:2px 8px;border-radius:5px;background:var(--color-bg);color:var(--color-neutral-400)">${esc(k.label)}</span>
+    <span style="font-size:11.5px;color:var(--color-neutral-500);white-space:nowrap">${when}</span>
+  </div>`;
+}
+
+function viewChanges() {
+  const kinds = {}; CHANGES.forEach(c => kinds[c.kind] = (kinds[c.kind] || 0) + 1);
+  const chips = Object.entries(CHANGE_KIND).map(([k, v]) => `<div style="display:flex;align-items:center;gap:8px;padding:10px 14px;border-radius:var(--radius-md);background:var(--color-surface);box-shadow:var(--shadow-sm)"><i class="ph ${v.icon}" style="color:${v.tone};font-size:16px"></i><span style="flex:1;font-size:12.5px;color:var(--color-neutral-300)">${v.label}</span><span style="font-size:15px;font-weight:500">${kinds[k] || 0}</span></div>`).join("");
+  return `<div style="display:flex;flex-direction:column;gap:16px">
+    <p style="margin:0;font-size:14px;color:var(--color-neutral-400);max-width:760px">Tudo que as varreduras detectaram mudar no inventário — novos hosts, nomes resolvidos, sistemas operacionais e portas que abriram ou fecharam.</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">${chips}</div>
+    <section style="padding:14px 20px;border-radius:var(--radius-md);background:var(--color-surface);box-shadow:var(--shadow-sm);display:flex;flex-direction:column">
+      <div style="display:flex;align-items:baseline;gap:10px;padding-bottom:6px"><h4 style="margin:0;font-size:16px">Linha do tempo</h4><span style="font-size:12px;color:var(--color-neutral-500)">${CHANGES.length} evento(s)</span></div>
+      ${CHANGES.map(changeRow).join("") || `<span style="font-size:13px;color:var(--color-neutral-500);padding:16px 0">Nenhuma mudança registrada ainda. Rode uma varredura para começar a acompanhar.</span>`}
+    </section>
   </div>`;
 }
 

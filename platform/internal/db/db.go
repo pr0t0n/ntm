@@ -68,7 +68,16 @@ func (s *Store) migrate(ctx context.Context) error {
 		    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 		    used_at    TIMESTAMPTZ,
 		    used_by    BIGINT
-		);`)
+		);
+		CREATE TABLE IF NOT EXISTS changes (
+		    id      BIGSERIAL PRIMARY KEY,
+		    ts      TIMESTAMPTZ NOT NULL DEFAULT now(),
+		    host_ip TEXT NOT NULL,
+		    kind    TEXT NOT NULL,
+		    detail  TEXT NOT NULL DEFAULT ''
+		);
+		CREATE INDEX IF NOT EXISTS idx_changes_ts ON changes (ts DESC);
+		CREATE INDEX IF NOT EXISTS idx_changes_ip ON changes (host_ip);`)
 	return err
 }
 
@@ -371,6 +380,9 @@ func (s *Store) ResetInventory(ctx context.Context) (models.ResetResult, error) 
 		        scan_requested=false, stop_requested=false`); err != nil {
 		return res, err
 	}
+	if _, err := tx.Exec(ctx, `TRUNCATE changes RESTART IDENTITY`); err != nil {
+		return res, err
+	}
 	return res, tx.Commit(ctx)
 }
 
@@ -424,8 +436,41 @@ func (s *Store) UpsertHost(ctx context.Context, h models.ReportedHost, assetType
 
 // UpsertPingHost stores a host that answered the phase-1 ping. It only touches
 // liveness/L2 fields, so data from later phases of earlier scans is preserved.
+// recordChange appends an entry to the change log (best-effort).
+func (s *Store) recordChange(ctx context.Context, ip, kind, detail string) {
+	_, _ = s.pool.Exec(ctx, `INSERT INTO changes (host_ip, kind, detail) VALUES ($1,$2,$3)`, ip, kind, detail)
+}
+
+// RecentChanges returns the latest change-log entries, optionally for one IP.
+func (s *Store) RecentChanges(ctx context.Context, ip string, limit int) ([]models.Change, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	var rows pgx.Rows
+	var err error
+	if ip != "" {
+		rows, err = s.pool.Query(ctx, `SELECT id, ts, host_ip, kind, detail FROM changes WHERE host_ip=$1 ORDER BY ts DESC LIMIT $2`, ip, limit)
+	} else {
+		rows, err = s.pool.Query(ctx, `SELECT id, ts, host_ip, kind, detail FROM changes ORDER BY ts DESC LIMIT $1`, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.Change
+	for rows.Next() {
+		var c models.Change
+		if err := rows.Scan(&c.ID, &c.TS, &c.HostIP, &c.Kind, &c.Detail); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) UpsertPingHost(ctx context.Context, h models.ReportedHost, agentID int64) error {
-	_, err := s.pool.Exec(ctx,
+	var inserted bool
+	err := s.pool.QueryRow(ctx,
 		`INSERT INTO hosts (ip, status, mac, vendor, agent_id, last_seen)
 		 VALUES ($1,'up',$2,$3,$4, now())
 		 ON CONFLICT (ip) DO UPDATE SET
@@ -433,13 +478,19 @@ func (s *Store) UpsertPingHost(ctx context.Context, h models.ReportedHost, agent
 		    mac      = CASE WHEN EXCLUDED.mac <> '' THEN EXCLUDED.mac ELSE hosts.mac END,
 		    vendor   = CASE WHEN EXCLUDED.vendor <> '' THEN EXCLUDED.vendor ELSE hosts.vendor END,
 		    agent_id = EXCLUDED.agent_id,
-		    last_seen = now()`,
-		h.IP, h.MAC, h.Vendor, agentID)
+		    last_seen = now()
+		 RETURNING (xmax = 0)`,
+		h.IP, h.MAC, h.Vendor, agentID).Scan(&inserted)
+	if err == nil && inserted {
+		s.recordChange(ctx, h.IP, "host_novo", "Host descoberto na rede")
+	}
 	return err
 }
 
 // SetHostname stores the phase-2 hostname of a known host.
 func (s *Store) SetHostname(ctx context.Context, ip, hostname string) error {
+	var old string
+	_ = s.pool.QueryRow(ctx, `SELECT hostname FROM hosts WHERE ip=$1`, ip).Scan(&old)
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE hosts SET hostname=$2, last_seen=now() WHERE ip=$1`, ip, hostname)
 	if err != nil {
@@ -447,6 +498,13 @@ func (s *Store) SetHostname(ctx context.Context, ip, hostname string) error {
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
+	}
+	if hostname != "" && hostname != old {
+		if old == "" {
+			s.recordChange(ctx, ip, "hostname", "Nome resolvido: "+hostname)
+		} else {
+			s.recordChange(ctx, ip, "hostname", "Nome alterado: "+old+" -> "+hostname)
+		}
 	}
 	return nil
 }
@@ -465,6 +523,31 @@ func (s *Store) ReplacePorts(ctx context.Context, ip string, ports []models.Repo
 	}
 	if err != nil {
 		return err
+	}
+	// Diff the open-port set to log opened/closed ports.
+	oldPorts := map[int]bool{}
+	if rows, e := tx.Query(ctx, `SELECT port FROM ports WHERE host_id=$1`, hostID); e == nil {
+		for rows.Next() {
+			var pt int
+			if rows.Scan(&pt) == nil {
+				oldPorts[pt] = true
+			}
+		}
+		rows.Close()
+	}
+	newPorts := map[int]bool{}
+	for _, p := range ports {
+		newPorts[p.Port] = true
+	}
+	for pt := range newPorts {
+		if !oldPorts[pt] && len(oldPorts) > 0 {
+			s.recordChange(ctx, ip, "porta_aberta", fmt.Sprintf("Porta %d aberta", pt))
+		}
+	}
+	for pt := range oldPorts {
+		if !newPorts[pt] {
+			s.recordChange(ctx, ip, "porta_fechada", fmt.Sprintf("Porta %d fechada", pt))
+		}
 	}
 	if _, err = tx.Exec(ctx, `DELETE FROM ports WHERE host_id=$1`, hostID); err != nil {
 		return err
@@ -490,6 +573,8 @@ func (s *Store) MergeDetection(ctx context.Context, ip, osGuess string, ports []
 	}
 	defer tx.Rollback(ctx)
 	var hostID int64
+	var oldOS string
+	_ = tx.QueryRow(ctx, `SELECT os_guess FROM hosts WHERE ip=$1`, ip).Scan(&oldOS)
 	err = tx.QueryRow(ctx,
 		`UPDATE hosts SET os_guess = CASE WHEN $2 <> '' THEN $2 ELSE os_guess END, last_seen=now()
 		 WHERE ip=$1 RETURNING id`, ip, osGuess).Scan(&hostID)
@@ -498,6 +583,13 @@ func (s *Store) MergeDetection(ctx context.Context, ip, osGuess string, ports []
 	}
 	if err != nil {
 		return err
+	}
+	if osGuess != "" && osGuess != oldOS {
+		if oldOS == "" {
+			s.recordChange(ctx, ip, "so", "SO identificado: "+osGuess)
+		} else {
+			s.recordChange(ctx, ip, "so", "SO alterado: "+oldOS+" -> "+osGuess)
+		}
 	}
 	for _, p := range ports {
 		if _, err = tx.Exec(ctx,

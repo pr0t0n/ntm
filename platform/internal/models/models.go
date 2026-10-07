@@ -132,6 +132,15 @@ type AppCount struct {
 	Count int    `json:"count"`
 }
 
+// Change is one entry in the discovery change log.
+type Change struct {
+	ID     int64     `json:"id"`
+	TS     time.Time `json:"ts"`
+	HostIP string    `json:"host_ip"`
+	Kind   string    `json:"kind"`
+	Detail string    `json:"detail"`
+}
+
 // ResetResult reports how many inventory records a reset removed.
 type ResetResult struct {
 	Hosts int `json:"hosts"`

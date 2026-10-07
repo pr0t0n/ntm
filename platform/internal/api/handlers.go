@@ -47,6 +47,7 @@ func (s *Server) Routes(web http.Handler) http.Handler {
 	mux.HandleFunc("GET /api/v1/hosts", s.handleHosts)
 	mux.HandleFunc("GET /api/v1/hosts/{id}", s.handleHost)
 	mux.HandleFunc("GET /api/v1/network-map", s.handleMap)
+	mux.HandleFunc("GET /api/v1/changes", s.handleChanges)
 	mux.HandleFunc("POST /api/v1/reset", s.handleReset)
 	mux.HandleFunc("POST /api/v1/install-tokens", func(w http.ResponseWriter, r *http.Request) {
 		token, err := s.store.CreateInstallToken(r.Context(), "")
@@ -406,6 +407,20 @@ func (s *Server) handleReset(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("inventory reset by %s: %d hosts, %d ports, %d dns removed", r.RemoteAddr, res.Hosts, res.Ports, res.DNS)
 	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
+	ip := r.URL.Query().Get("ip")
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	changes, err := s.store.RecentChanges(r.Context(), ip, limit)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "changes error")
+		return
+	}
+	if changes == nil {
+		changes = []models.Change{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"changes": changes})
 }
 
 // --- helpers ---
