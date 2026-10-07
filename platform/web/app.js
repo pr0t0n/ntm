@@ -25,13 +25,12 @@ const state = {
   screen: localStorage.getItem("atlas.screen") || "dash",
   search: "", fType: "Todos", fFam: "Todas", fSubnet: "Todas", fStatus: "Todos",
   fEol: false, stale: false, limit: 40, drawer: null,
-  mapSel: null, focus: null, colorBy: "tipo", hl: "none", links: true, mapView: null,
+  mapSel: null, focus: null, colorBy: "tipo", hl: "none", links: true, mapView: null, installToken: null,
   scanName: "Varredura ad-hoc", agentId: null, range: "",
 };
 
 let ASSETS = [];
 let SUBNETS = [];
-let INSTALL_TOKEN = "";
 let AGENTS = [];
 let byId = {};
 
@@ -627,36 +626,51 @@ function viewScan() {
       <section style="${card.replace("gap:16px", "gap:14px")}">${runHtml}</section>
     </div>
     <section style="padding:18px 20px;border-radius:var(--radius-md);background:var(--color-surface);box-shadow:var(--shadow-sm);display:flex;flex-direction:column;gap:14px">
-      <div style="display:flex;align-items:baseline;gap:10px"><h4 style="margin:0;font-size:16px">Instalação do coletor</h4><span style="font-size:12px;color:var(--color-neutral-500)">agente de descoberta</span></div>
-      <div style="display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start">
-        <div style="display:flex;flex-direction:column;gap:12px;min-width:230px">
+      <div style="display:flex;align-items:baseline;gap:10px"><h4 style="margin:0;font-size:16px">Instalação do coletor</h4><span style="font-size:12px;color:var(--color-neutral-500)">um token por instalação</span></div>
+      <div style="display:flex;flex-wrap:wrap;gap:12px 28px;align-items:center">
+        <div style="display:flex;flex-direction:column;gap:5px">
+          <span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500)">Sistemas aceitos</span>
+          <div style="display:flex;gap:6px;flex-wrap:wrap"><span class="tag tag-accent"><i class="ph ph-linux-logo"></i>&nbsp;Linux (x86-64 / ARM64)</span></div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:5px">
+          <span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500)">Requisitos</span>
+          <span style="font-size:12.5px;color:var(--color-neutral-300)">Python 3 · root / <code style="font-family:ui-monospace,monospace">CAP_NET_RAW</code></span>
+        </div>
+        <button class="btn btn-primary" style="margin-left:auto" onclick="App.newInstall()"><i class="ph ph-plus-circle"></i>Instalar coletor</button>
+      </div>
+      ${state.installToken ? `
+      <div style="border-top:1px solid var(--color-divider);padding-top:14px;display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start">
+        <div style="display:flex;flex-direction:column;gap:12px;min-width:260px">
           <div style="display:flex;flex-direction:column;gap:5px">
-            <span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500)">Sistemas aceitos</span>
-            <div style="display:flex;gap:6px;flex-wrap:wrap"><span class="tag tag-accent"><i class="ph ph-linux-logo"></i>&nbsp;Linux (x86-64 / ARM64)</span></div>
+            <span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500)">1 · Baixar o agente</span>
+            <a class="btn btn-secondary" href="/ntm_agent.py" download="ntm_agent.py" style="align-self:flex-start"><i class="ph ph-download-simple"></i>Baixar agente (ntm_agent.py)</a>
           </div>
           <div style="display:flex;flex-direction:column;gap:5px">
-            <span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500)">Requisitos</span>
-            <span style="font-size:12.5px;color:var(--color-neutral-300)">Python 3 · privilégio root / <code style="font-family:ui-monospace,monospace">CAP_NET_RAW</code> (ICMP e descoberta TCP)</span>
+            <span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500)">2 · Conexão</span>
+            <div style="display:flex;justify-content:space-between;gap:12px;font-size:12.5px"><span style="color:var(--color-neutral-500)">Plataforma</span><span style="font-family:ui-monospace,monospace">${esc(location.origin)}</span></div>
+            <div style="display:flex;justify-content:space-between;gap:12px;font-size:12.5px"><span style="color:var(--color-neutral-500)">TLS</span><span>self-signed (aceite o aviso)</span></div>
           </div>
           <div style="display:flex;flex-direction:column;gap:5px">
-            <span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500)">Token de instalação</span>
+            <span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500)">Token desta instalação</span>
             <div style="display:flex;align-items:center;gap:8px">
-              <code style="font-family:ui-monospace,monospace;font-size:12.5px;background:var(--color-bg);padding:7px 10px;border-radius:var(--radius-md);color:var(--color-accent-200);user-select:all;word-break:break-all">${INSTALL_TOKEN ? esc(INSTALL_TOKEN) : "—"}</code>
-              <button class="btn btn-secondary btn-icon" title="Copiar token" onclick="App.copy(${JSON.stringify(INSTALL_TOKEN)})"><i class="ph ph-copy"></i></button>
+              <code style="font-family:ui-monospace,monospace;font-size:12.5px;background:var(--color-bg);padding:7px 10px;border-radius:var(--radius-md);color:var(--color-accent-200);user-select:all;word-break:break-all">${esc(state.installToken)}</code>
+              <button class="btn btn-secondary btn-icon" title="Copiar token" onclick="App.copy(${JSON.stringify(state.installToken)})"><i class="ph ph-copy"></i></button>
             </div>
-            <span style="font-size:11px;color:var(--color-neutral-600)">Configurado na plataforma (NTM_INSTALL_TOKEN). É o mesmo para todos os coletores.</span>
+            <span style="font-size:11px;color:var(--color-neutral-600)">Único para este coletor. Gere um novo para cada host.</span>
           </div>
-          <a class="btn btn-primary" href="/ntm_agent.py" download="ntm_agent.py" style="align-self:flex-start"><i class="ph ph-download-simple"></i>Baixar agente</a>
         </div>
         <div style="flex:1;min-width:320px;display:flex;flex-direction:column;gap:6px">
-          <span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500)">Instalação (host Linux)</span>
+          <span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500)">3 · Instalar (host Linux)</span>
           <pre style="margin:0;background:var(--color-bg);border-radius:var(--radius-md);padding:12px 14px;font-family:ui-monospace,monospace;font-size:12px;color:var(--color-neutral-300);overflow-x:auto;white-space:pre;line-height:1.6">sudo apt-get install -y python3
 export NTM_PLATFORM_URL=${esc(location.origin)}
-export NTM_INSTALL_TOKEN=${esc(INSTALL_TOKEN || "<token-de-instalação>")}
+export NTM_INSTALL_TOKEN=${esc(state.installToken)}
 sudo -E python3 ntm_agent.py</pre>
-          <span style="font-size:11.5px;color:var(--color-neutral-500)">O coletor só precisa da URL da plataforma e do token. <strong style="color:var(--color-neutral-400);font-weight:500">O range a varrer é definido aqui na plataforma</strong>, por varredura (campo Escopo). Em produção, instale como serviço (systemd).</span>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <button class="btn btn-secondary" onclick="App.copy(${JSON.stringify("sudo apt-get install -y python3\nexport NTM_PLATFORM_URL=")} + location.origin + ${JSON.stringify("\nexport NTM_INSTALL_TOKEN=" + "")} + ${JSON.stringify(state.installToken)} + ${JSON.stringify("\nsudo -E python3 ntm_agent.py")})"><i class="ph ph-copy"></i>Copiar comandos</button>
+            <span style="font-size:11.5px;color:var(--color-neutral-500)">O range a varrer é definido aqui na plataforma (campo Escopo). Em produção, instale como serviço (systemd).</span>
+          </div>
         </div>
-      </div>
+      </div>` : `<span style="font-size:12px;color:var(--color-neutral-500)">Clique em <strong style="color:var(--color-neutral-300);font-weight:500">Instalar coletor</strong> para gerar um token único e ver os passos de download, conexão e instalação.</span>`}
     </section>
     <section style="padding:14px 18px;border-radius:var(--radius-md);background:var(--color-surface);box-shadow:var(--shadow-sm);display:flex;flex-direction:column;gap:6px;overflow-x:auto">
       <h4 style="margin:0;font-size:16px">Coletores registrados</h4>
@@ -703,6 +717,10 @@ const App = {
   showMore() { state.limit += 40; render(); },
   openDrawer(id) { state.drawer = id; render(); },
   closeDrawer() { state.drawer = null; render(); },
+  async newInstall() {
+    try { const r = await fetch(`${API}/install-tokens`, { method: "POST" }); const d = await r.json(); state.installToken = d.install_token || null; } catch (e) { console.error(e); alert("Falha ao gerar instalação."); return; }
+    state.screen = "scan"; render();
+  },
   copy(txt) { if (!txt) return; (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).catch(() => { const t = document.createElement("textarea"); t.value = txt; document.body.appendChild(t); t.select(); try { document.execCommand("copy"); } catch (e) {} t.remove(); }); },
   setAgent(id) { state.agentId = id; render(); },
   onRange(v) { state.range = v; },
@@ -760,7 +778,6 @@ setInterval(() => {
 
 async function boot() {
   wireHeader();
-  try { INSTALL_TOKEN = (await getJSON(`${API}/install-info`)).install_token || ""; } catch (e) { /* optional */ }
   await refresh();
 }
 document.addEventListener("DOMContentLoaded", boot);

@@ -48,8 +48,13 @@ func (s *Server) Routes(web http.Handler) http.Handler {
 	mux.HandleFunc("GET /api/v1/hosts/{id}", s.handleHost)
 	mux.HandleFunc("GET /api/v1/network-map", s.handleMap)
 	mux.HandleFunc("POST /api/v1/reset", s.handleReset)
-	mux.HandleFunc("GET /api/v1/install-info", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"install_token": s.cfg.InstallToken})
+	mux.HandleFunc("POST /api/v1/install-tokens", func(w http.ResponseWriter, r *http.Request) {
+		token, err := s.store.CreateInstallToken(r.Context(), "")
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, "could not create token")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"install_token": token})
 	})
 	mux.HandleFunc("GET /api/v1/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -67,7 +72,8 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	if req.InstallToken != s.cfg.InstallToken {
+	// Accept the shared bootstrap token or any platform-generated install token.
+	if req.InstallToken != s.cfg.InstallToken && !s.store.InstallTokenValid(r.Context(), req.InstallToken) {
 		httpError(w, http.StatusUnauthorized, "invalid install token")
 		return
 	}
@@ -81,6 +87,7 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.store.SetAgentIP(r.Context(), agent.ID, pickIP(req.IP, r))
+	s.store.MarkInstallTokenUsed(r.Context(), req.InstallToken, agent.ID)
 	writeJSON(w, http.StatusOK, models.EnrollResponse{
 		AgentID:    agent.ID,
 		AgentToken: agent.AgentToken,

@@ -61,7 +61,14 @@ func (s *Store) migrate(ctx context.Context) error {
 		ALTER TABLE agents ADD COLUMN IF NOT EXISTS phase_started_at TIMESTAMPTZ;
 		ALTER TABLE agents ADD COLUMN IF NOT EXISTS scan_hosts INT NOT NULL DEFAULT 0;
 		ALTER TABLE agents ADD COLUMN IF NOT EXISTS ip TEXT NOT NULL DEFAULT '';
-		ALTER TABLE agents ADD COLUMN IF NOT EXISTS scan_range TEXT NOT NULL DEFAULT '';`)
+		ALTER TABLE agents ADD COLUMN IF NOT EXISTS scan_range TEXT NOT NULL DEFAULT '';
+		CREATE TABLE IF NOT EXISTS install_tokens (
+		    token      TEXT PRIMARY KEY,
+		    label      TEXT NOT NULL DEFAULT '',
+		    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+		    used_at    TIMESTAMPTZ,
+		    used_by    BIGINT
+		);`)
 	return err
 }
 
@@ -121,6 +128,27 @@ func newToken() string {
 	b := make([]byte, 24)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// CreateInstallToken generates a unique, per-installation enrollment token.
+func (s *Store) CreateInstallToken(ctx context.Context, label string) (string, error) {
+	token := newToken()
+	_, err := s.pool.Exec(ctx, `INSERT INTO install_tokens (token, label) VALUES ($1,$2)`, token, label)
+	return token, err
+}
+
+// InstallTokenValid reports whether a generated install token exists (it stays
+// valid so the collector can re-enroll if it loses its state).
+func (s *Store) InstallTokenValid(ctx context.Context, token string) bool {
+	var ok bool
+	err := s.pool.QueryRow(ctx, `SELECT true FROM install_tokens WHERE token=$1`, token).Scan(&ok)
+	return err == nil && ok
+}
+
+// MarkInstallTokenUsed records which agent enrolled with a token (informational).
+func (s *Store) MarkInstallTokenUsed(ctx context.Context, token string, agentID int64) {
+	_, _ = s.pool.Exec(ctx,
+		`UPDATE install_tokens SET used_at=COALESCE(used_at, now()), used_by=$2 WHERE token=$1`, token, agentID)
 }
 
 func (s *Store) CreateAgent(ctx context.Context, name string, ranges []string) (models.Agent, error) {
