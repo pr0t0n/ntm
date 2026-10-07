@@ -343,27 +343,31 @@ function filtered() {
     (s.fType === "Todos" || a.type === s.fType) &&
     (s.fFam === "Todas" || a.fam === s.fFam) &&
     (s.fSubnet === "Todas" || a.subnetName === s.fSubnet) &&
-    (s.fStatus === "Todos" || a.status === s.fStatus) &&
-    (!s.fEol || a.eol) && (!s.stale || a.seenMin > 43200) &&
-    (!q || (a.host + " " + a.ip + " " + a.mac + " " + a.os + " " + a.vendor).toLowerCase().includes(q)));
+    (!q || (a.host + " " + a.ip + " " + a.mac + " " + a.os + " " + a.vendor + " " +
+            a.ports.map(p => p.port + " " + (p.service || "") + " " + (p.product || "")).join(" ")).toLowerCase().includes(q)));
 }
 
 function viewCmdb() {
   const s = state, l = filtered();
   const rows = l.slice(0, s.limit);
-  const m = l.filter(a => a.status === "Gerenciado").length, e = l.filter(a => a.eol).length;
-  const hasFilters = s.fType !== "Todos" || s.fFam !== "Todas" || s.fSubnet !== "Todas" || s.fStatus !== "Todos" || s.fEol || s.stale || !!s.search;
+  const withPorts = l.filter(a => a.portCount > 0).length;
+  const totalPorts = l.reduce((n, a) => n + a.portCount, 0);
+  const hasFilters = s.fType !== "Todos" || s.fFam !== "Todas" || s.fSubnet !== "Todas" || !!s.search;
   const typeOpts = ["Todos", ...Object.keys(ICON)];
   const famOpts = ["Todas", "Windows", "Linux", "macOS", "Rede / appliance", "Embarcado / desconhecido"];
   const subOpts = ["Todas", ...SUBNETS.map(x => x.name)];
   const opt = (arr, cur) => arr.map(o => `<option value="${esc(o)}" ${o === cur ? "selected" : ""}>${esc(o)}</option>`).join("");
+  const chip = "display:inline-block;font-size:11px;padding:1px 7px;border-radius:5px;background:var(--color-bg);color:var(--color-neutral-300);font-family:ui-monospace,monospace;margin:1px 2px 1px 0";
+  const portCell = r => {
+    if (!r.ports.length) return `<span style="color:var(--color-neutral-600)">—</span>`;
+    const shown = r.ports.slice(0, 8).map(p => `<span style="${chip}">${p.port}${p.service ? "/" + esc(p.service) : ""}</span>`).join("");
+    return shown + (r.ports.length > 8 ? `<span style="font-size:11px;color:var(--color-neutral-500)">+${r.ports.length - 8}</span>` : "");
+  };
   return `<div style="display:flex;flex-direction:column;gap:14px">
     <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end">
       <div class="field" style="width:170px"><label>Tipo</label><select class="input" onchange="App.setFilter('fType',this.value)">${opt(typeOpts, s.fType)}</select></div>
       <div class="field" style="width:200px"><label>Família de SO</label><select class="input" onchange="App.setFilter('fFam',this.value)">${opt(famOpts, s.fFam)}</select></div>
       <div class="field" style="width:200px"><label>Sub-rede</label><select class="input" onchange="App.setFilter('fSubnet',this.value)">${opt(subOpts, s.fSubnet)}</select></div>
-      <div class="field"><label>Status</label><div style="display:inline-flex;border:1px solid var(--color-divider);border-radius:var(--radius-md);overflow:hidden;height:36px">${seg(["Todos", "Gerenciado", "Não gerenciado", "Novo"], s.fStatus, "setStatus")}</div></div>
-      <button onclick="App.toggleEol()" style="height:36px;display:flex;align-items:center;gap:7px;padding:0 12px;border-radius:var(--radius-md);border:1px solid ${s.fEol ? CRIT : "var(--color-divider)"};background:transparent;color:${s.fEol ? "oklch(0.8 0.1 22)" : "var(--color-neutral-300)"};font:inherit;font-size:12.5px;cursor:pointer"><i class="ph ph-warning"></i>Só SO sem suporte</button>
       <div style="margin-left:auto;display:flex;gap:8px">
         ${hasFilters ? `<button class="btn btn-ghost" onclick="App.clearFilters()" style="font-size:12.5px;height:36px">Limpar filtros</button>` : ""}
         <button class="btn btn-secondary" onclick="App.exportCsv()" style="height:36px"><i class="ph ph-download-simple"></i>Exportar CSV</button>
@@ -371,20 +375,19 @@ function viewCmdb() {
     </div>
     <div style="display:flex;gap:18px;font-size:12.5px;color:var(--color-neutral-400)">
       <span><strong style="color:var(--color-text);font-weight:500">${l.length}</strong> itens de configuração</span>
-      <span>${l.length ? Math.round(m / l.length * 100) : 0}% gerenciados</span><span>${e} com SO sem suporte</span>
+      <span>${withPorts} com portas abertas</span><span>${totalPorts} portas abertas no total</span>
     </div>
     <div style="border-radius:var(--radius-md);background:var(--color-surface);box-shadow:var(--shadow-sm);padding:6px 10px;overflow-x:auto">
-      <table class="table" style="font-size:13px;min-width:900px">
-        <thead><tr><th>Ativo</th><th>Tipo</th><th>Sistema operacional</th><th>Sub-rede</th><th>Status</th><th>Criticidade</th><th>Visto</th></tr></thead>
+      <table class="table" style="font-size:13px;min-width:860px">
+        <thead><tr><th>Ativo</th><th>Tipo</th><th>Sistema operacional</th><th>Sub-rede</th><th>Portas</th><th>Visto</th></tr></thead>
         <tbody>
           ${rows.map(r => `<tr onclick="App.openDrawer('${r.id}')" style="cursor:pointer">
             <td><div style="display:flex;flex-direction:column"><span style="font-weight:500">${esc(r.host)}</span><span style="font-size:11.5px;color:var(--color-neutral-500);font-family:ui-monospace,monospace">${esc(r.ip)}</span></div></td>
             <td><span style="display:flex;align-items:center;gap:7px;color:var(--color-neutral-300)"><i class="ph ${r.icon}" style="color:var(--color-accent-400)"></i>${esc(r.type)}</span></td>
-            <td><span style="display:flex;align-items:center;gap:7px">${esc(r.os)}${r.eol ? `<span style="font-size:10px;padding:1px 6px;border-radius:5px;color:oklch(0.8 0.1 22);background:color-mix(in oklch,oklch(0.72 0.14 22) 18%,transparent)">sem suporte</span>` : ""}</span></td>
+            <td>${esc(r.os)}</td>
             <td style="color:var(--color-neutral-300)">${esc(r.subnetName)}</td>
-            <td><span style="display:flex;align-items:center;gap:7px"><span style="width:7px;height:7px;border-radius:50%;background:${statusColor(r.status)}"></span>${esc(r.status)}</span></td>
-            <td style="color:var(--color-neutral-300)">${esc(r.crit)}</td>
-            <td style="color:${r.seenMin > 43200 ? WARN : "var(--color-neutral-400)"};white-space:nowrap">${fmtSeen(r.seenMin)}</td>
+            <td style="max-width:360px">${portCell(r)}</td>
+            <td style="color:var(--color-neutral-400);white-space:nowrap">${fmtSeen(r.seenMin)}</td>
           </tr>`).join("")}
         </tbody>
       </table>
@@ -645,8 +648,8 @@ const App = {
   rescan(id) { const a = byId[id]; state.drawer = null; state.screen = "scan"; state.range = a ? a.subnetName : ""; render(); },
   exportCsv() {
     const rows = filtered();
-    const head = ["CI", "Hostname", "IP", "MAC", "Tipo", "SO", "Sem suporte", "Sub-rede", "Status", "Criticidade"];
-    const csv = [head, ...rows.map(a => [a.ci, a.host, a.ip, a.mac, a.type, a.os, a.eol ? "Sim" : "Não", a.subnetName, a.status, a.crit])].map(r => r.map(x => `"${x}"`).join(";")).join("\n");
+    const head = ["CI", "Hostname", "IP", "MAC", "Tipo", "SO", "Sub-rede", "Portas abertas"];
+    const csv = [head, ...rows.map(a => [a.ci, a.host, a.ip, a.mac, a.type, a.os, a.subnetName, a.ports.map(p => p.port + (p.service ? "/" + p.service : "")).join(" ")])].map(r => r.map(x => `"${x}"`).join(";")).join("\n");
     const el = document.createElement("a");
     el.href = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv" }));
     el.download = "cmdb-ativos.csv"; el.click();
