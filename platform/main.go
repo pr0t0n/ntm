@@ -46,6 +46,19 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	// Schedule ticker: fire due recurring scans.
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for range t.C {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			if n := store.RunDueSchedules(ctx); n > 0 {
+				log.Printf("schedules: triggered %d scan(s)", n)
+			}
+			cancel()
+		}
+	}()
+
 	go func() {
 		log.Printf("NTM platform listening on %s (HTTPS/TLS)", cfg.ListenAddr)
 		err := srv.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey)

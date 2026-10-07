@@ -80,7 +80,18 @@ func (s *Store) migrate(ctx context.Context) error {
 		CREATE INDEX IF NOT EXISTS idx_changes_ip ON changes (host_ip);
 		ALTER TABLE hosts ADD COLUMN IF NOT EXISTS owner TEXT NOT NULL DEFAULT '';
 		ALTER TABLE hosts ADD COLUMN IF NOT EXISTS tags  TEXT[] NOT NULL DEFAULT '{}';
-		ALTER TABLE hosts ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT '';`)
+		ALTER TABLE hosts ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT '';
+		CREATE TABLE IF NOT EXISTS schedules (
+		    id           BIGSERIAL PRIMARY KEY,
+		    label        TEXT NOT NULL DEFAULT '',
+		    agent_id     BIGINT NOT NULL,
+		    scan_range   TEXT NOT NULL DEFAULT '',
+		    interval_min INT NOT NULL DEFAULT 1440,
+		    enabled      BOOLEAN NOT NULL DEFAULT true,
+		    next_run     TIMESTAMPTZ NOT NULL DEFAULT now(),
+		    last_run     TIMESTAMPTZ,
+		    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+		);`)
 	return err
 }
 
@@ -766,6 +777,106 @@ func (s *Store) HostByID(ctx context.Context, id int64) (models.Host, error) {
 		return h, err
 	}
 	return out[0], nil
+}
+
+// --- Schedules ---
+
+func (s *Store) CreateSchedule(ctx context.Context, label string, agentID int64, scanRange string, intervalMin int) (models.Schedule, error) {
+	if intervalMin < 1 {
+		intervalMin = 1440
+	}
+	var sc models.Schedule
+	var last *time.Time
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO schedules (label, agent_id, scan_range, interval_min, next_run)
+		 VALUES ($1,$2,$3,$4, now() + make_interval(mins => $4))
+		 RETURNING id, label, agent_id, scan_range, interval_min, enabled, next_run, last_run`,
+		label, agentID, scanRange, intervalMin).
+		Scan(&sc.ID, &sc.Label, &sc.AgentID, &sc.Range, &sc.IntervalMin, &sc.Enabled, &sc.NextRun, &last)
+	if last != nil {
+		sc.LastRun = *last
+	}
+	return sc, err
+}
+
+func (s *Store) ListSchedules(ctx context.Context) ([]models.Schedule, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT s.id, s.label, s.agent_id, s.scan_range, s.interval_min, s.enabled, s.next_run, s.last_run,
+		        COALESCE(a.name,'(removido)')
+		 FROM schedules s LEFT JOIN agents a ON a.id=s.agent_id ORDER BY s.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.Schedule
+	for rows.Next() {
+		var sc models.Schedule
+		var last *time.Time
+		if err := rows.Scan(&sc.ID, &sc.Label, &sc.AgentID, &sc.Range, &sc.IntervalMin, &sc.Enabled, &sc.NextRun, &last, &sc.AgentName); err != nil {
+			return nil, err
+		}
+		if last != nil {
+			sc.LastRun = *last
+		}
+		out = append(out, sc)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) SetScheduleEnabled(ctx context.Context, id int64, enabled bool) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE schedules SET enabled=$2 WHERE id=$1`, id, enabled)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) DeleteSchedule(ctx context.Context, id int64) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM schedules WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// RunDueSchedules requests a scan for each enabled schedule whose time has come
+// (and whose agent is idle), then advances next_run. Called by the ticker.
+func (s *Store) RunDueSchedules(ctx context.Context) int {
+	rows, err := s.pool.Query(ctx,
+		`SELECT s.id, s.agent_id, s.scan_range, s.interval_min
+		 FROM schedules s JOIN agents a ON a.id=s.agent_id
+		 WHERE s.enabled AND s.next_run <= now() AND a.scan_state='idle' AND NOT a.scan_requested`)
+	if err != nil {
+		return 0
+	}
+	type due struct {
+		id, agentID        int64
+		scanRange          string
+		interval           int
+	}
+	var list []due
+	for rows.Next() {
+		var d due
+		if rows.Scan(&d.id, &d.agentID, &d.scanRange, &d.interval) == nil {
+			list = append(list, d)
+		}
+	}
+	rows.Close()
+	n := 0
+	for _, d := range list {
+		if err := s.RequestScan(ctx, d.agentID, d.scanRange); err == nil {
+			_, _ = s.pool.Exec(ctx,
+				`UPDATE schedules SET last_run=now(), next_run=now() + make_interval(mins => $2) WHERE id=$1`, d.id, d.interval)
+			n++
+		}
+	}
+	return n
 }
 
 var ErrNotFound = errors.New("not found")

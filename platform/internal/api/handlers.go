@@ -41,6 +41,10 @@ func (s *Server) Routes(web http.Handler) http.Handler {
 	mux.HandleFunc("POST /api/v1/agents/{id}/run", s.handleRunAgent)
 	mux.HandleFunc("POST /api/v1/agents/{id}/stop", s.handleStopAgent)
 	mux.HandleFunc("DELETE /api/v1/agents/{id}", s.handleDeleteAgent)
+	mux.HandleFunc("GET /api/v1/schedules", s.handleSchedules)
+	mux.HandleFunc("POST /api/v1/schedules", s.handleCreateSchedule)
+	mux.HandleFunc("POST /api/v1/schedules/{id}/toggle", s.handleToggleSchedule)
+	mux.HandleFunc("DELETE /api/v1/schedules/{id}", s.handleDeleteSchedule)
 
 	// Frontend endpoints.
 	mux.HandleFunc("GET /api/v1/dashboard", s.handleDashboard)
@@ -365,6 +369,75 @@ func (s *Server) handleAnnotate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// --- Schedules ---
+
+func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
+	list, err := s.store.ListSchedules(r.Context())
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "schedules error")
+		return
+	}
+	if list == nil {
+		list = []models.Schedule{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"schedules": list})
+}
+
+func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Label       string `json:"label"`
+		AgentID     int64  `json:"agent_id"`
+		Range       string `json:"range"`
+		IntervalMin int    `json:"interval_min"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	sc, err := s.store.CreateSchedule(r.Context(), strings.TrimSpace(body.Label), body.AgentID, strings.TrimSpace(body.Range), body.IntervalMin)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "could not create")
+		return
+	}
+	writeJSON(w, http.StatusOK, sc)
+}
+
+func (s *Server) handleToggleSchedule(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if err := s.store.SetScheduleEnabled(r.Context(), id, body.Enabled); errors.Is(err, db.ErrNotFound) {
+		httpError(w, http.StatusNotFound, "not found")
+		return
+	} else if err != nil {
+		httpError(w, http.StatusInternalServerError, "error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleDeleteSchedule(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	if err := s.store.DeleteSchedule(r.Context(), id); errors.Is(err, db.ErrNotFound) {
+		httpError(w, http.StatusNotFound, "not found")
+		return
+	} else if err != nil {
+		httpError(w, http.StatusInternalServerError, "error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
 // --- Frontend endpoints ---

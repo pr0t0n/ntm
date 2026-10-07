@@ -135,6 +135,19 @@ type AppCount struct {
 	Count int    `json:"count"`
 }
 
+// Schedule is a recurring scan: a collector + range run every interval_min.
+type Schedule struct {
+	ID          int64      `json:"id"`
+	Label       string     `json:"label"`
+	AgentID     int64      `json:"agent_id"`
+	AgentName   string     `json:"agent_name"`
+	Range       string     `json:"range"`
+	IntervalMin int        `json:"interval_min"`
+	Enabled     bool       `json:"enabled"`
+	NextRun     time.Time  `json:"next_run"`
+	LastRun     time.Time  `json:"last_run"`
+}
+
 // Change is one entry in the discovery change log.
 type Change struct {
 	ID     int64     `json:"id"`

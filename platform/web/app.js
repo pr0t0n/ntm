@@ -35,6 +35,7 @@ let AGENTS = [];
 let byId = {};
 let byIP = {};
 let CHANGES = [];
+let SCHEDULES = [];
 const CHANGE_KIND = {
   host_novo: { icon: "ph-plus-circle", label: "Novo host", tone: "var(--color-accent-400)" },
   hostname: { icon: "ph-identification-card", label: "Hostname", tone: "var(--color-accent-300)" },
@@ -101,6 +102,7 @@ async function loadAssets() {
   byId = {}; byIP = {}; ASSETS.forEach(a => { byId[a.id] = a; byIP[a.ip] = a; });
   buildSubnets();
   try { CHANGES = (await getJSON(`${API}/changes?limit=200`)).changes || []; } catch (e) { CHANGES = []; }
+  try { SCHEDULES = (await getJSON(`${API}/schedules`)).schedules || []; } catch (e) { SCHEDULES = []; }
 }
 
 function buildSubnets() {
@@ -744,6 +746,25 @@ sudo -E python3 ntm_agent.py</pre>
         </div>
       </div>` : `<span style="font-size:12px;color:var(--color-neutral-500)">Clique em <strong style="color:var(--color-neutral-300);font-weight:500">Instalar coletor</strong> para gerar um token único e ver os passos de download, conexão e instalação.</span>`}
     </section>
+    <section style="padding:18px 20px;border-radius:var(--radius-md);background:var(--color-surface);box-shadow:var(--shadow-sm);display:flex;flex-direction:column;gap:14px">
+      <div style="display:flex;align-items:baseline;gap:10px"><h4 style="margin:0;font-size:16px">Agendamentos</h4><span style="font-size:12px;color:var(--color-neutral-500)">varreduras recorrentes</span></div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end">
+        <div class="field" style="flex:1;min-width:220px"><label>Range (CIDR)</label><input id="schedRange" class="input" placeholder="${esc(suggested || "ex: 10.0.0.0/8")}"></div>
+        <div class="field" style="width:170px"><label>Frequência</label><select id="schedInterval" class="input"><option value="60">A cada 1 h</option><option value="360">A cada 6 h</option><option value="720">A cada 12 h</option><option value="1440" selected>Diária (24 h)</option><option value="10080">Semanal</option></select></div>
+        <button class="btn btn-primary" onclick="App.createSchedule()" ${agent ? "" : "disabled"}><i class="ph ph-calendar-plus"></i>Agendar</button>
+      </div>
+      ${SCHEDULES.length ? `<div style="overflow-x:auto"><table class="table" style="font-size:13px;min-width:620px">
+        <thead><tr><th>Coletor</th><th>Range</th><th>Frequência</th><th>Próxima</th><th>Status</th><th></th></tr></thead>
+        <tbody>${SCHEDULES.map(sc => `<tr>
+          <td style="font-weight:500">${esc(sc.agent_name)}</td>
+          <td style="color:var(--color-neutral-300);font-family:ui-monospace,monospace">${esc(sc.range || "(escopo do coletor)")}</td>
+          <td style="color:var(--color-neutral-300)">${fmtInterval(sc.interval_min)}</td>
+          <td style="color:var(--color-neutral-300)">${sc.enabled ? new Date(sc.next_run).toLocaleString("pt-BR") : "—"}</td>
+          <td><button onclick="App.toggleSchedule('${sc.id}', ${!sc.enabled})" style="display:flex;align-items:center;gap:7px;border:0;background:transparent;color:${sc.enabled ? "var(--color-accent-400)" : "var(--color-neutral-500)"};font:inherit;font-size:12.5px;cursor:pointer"><i class="ph ${sc.enabled ? "ph-toggle-right" : "ph-toggle-left"}" style="font-size:18px"></i>${sc.enabled ? "ativo" : "pausado"}</button></td>
+          <td><button class="btn btn-ghost" onclick="App.deleteSchedule('${sc.id}')" style="font-size:12px;color:${CRIT}">Remover</button></td>
+        </tr>`).join("")}</tbody>
+      </table></div>` : `<span style="font-size:12px;color:var(--color-neutral-500)">Nenhum agendamento. A plataforma dispara a varredura do range no coletor selecionado na frequência escolhida.</span>`}
+    </section>
     <section style="padding:14px 18px;border-radius:var(--radius-md);background:var(--color-surface);box-shadow:var(--shadow-sm);display:flex;flex-direction:column;gap:6px;overflow-x:auto">
       <h4 style="margin:0;font-size:16px">Coletores registrados</h4>
       <table class="table" style="font-size:13px;min-width:600px">
@@ -761,6 +782,14 @@ sudo -E python3 ntm_agent.py</pre>
       </table>
     </section>
   </div>`;
+}
+
+function fmtInterval(m) {
+  if (m === 10080) return "Semanal";
+  if (m === 1440) return "Diária";
+  if (m >= 1440 && m % 1440 === 0) return "A cada " + (m / 1440) + " dias";
+  if (m >= 60 && m % 60 === 0) return "A cada " + (m / 60) + " h";
+  return "A cada " + m + " min";
 }
 
 function fmtElapsed(ms) {
@@ -798,6 +827,24 @@ const App = {
       if (!r.ok) throw new Error(await r.text());
       await refresh();
     } catch (e) { console.error(e); alert("Falha ao salvar anotações."); }
+  },
+  async createSchedule() {
+    const agent = AGENTS.find(a => String(a.id) === String(state.agentId)) || AGENTS[0];
+    if (!agent) return;
+    const range = document.getElementById("schedRange").value.trim();
+    const interval = parseInt(document.getElementById("schedInterval").value, 10) || 1440;
+    try {
+      const r = await fetch(`${API}/schedules`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agent_id: agent.id, range, interval_min: interval }) });
+      if (!r.ok) throw new Error(await r.text());
+      await refresh();
+    } catch (e) { console.error(e); alert("Falha ao agendar."); }
+  },
+  async toggleSchedule(id, enabled) {
+    try { await fetch(`${API}/schedules/${id}/toggle`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }) }); await refresh(); } catch (e) { console.error(e); }
+  },
+  async deleteSchedule(id) {
+    if (!confirm("Remover este agendamento?")) return;
+    try { await fetch(`${API}/schedules/${id}`, { method: "DELETE" }); await refresh(); } catch (e) { console.error(e); }
   },
   async newInstall() {
     try { const r = await fetch(`${API}/install-tokens`, { method: "POST" }); const d = await r.json(); state.installToken = d.install_token || null; } catch (e) { console.error(e); alert("Falha ao gerar instalação."); return; }
