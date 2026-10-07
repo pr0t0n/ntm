@@ -171,60 +171,41 @@ function renderCollector() {
 // ---------------- DASHBOARD ----------------
 function dash() {
   const assets = ASSETS, N = assets.length || 1;
-  const managed = assets.filter(a => a.status === "Gerenciado").length;
-  const eol = assets.filter(a => a.eol).length;
   const novos = assets.filter(a => a.discDays < 7).length;
-  const unman = assets.filter(a => a.status === "Não gerenciado").length;
-  const stale = assets.filter(a => a.seenMin > 43200).length;
-  const pct = Math.round(managed / N * 100);
+  const totalPorts = assets.reduce((n, a) => n + a.portCount, 0);
+  const withPorts = assets.filter(a => a.portCount > 0).length;
   const famCount = {}; assets.forEach(a => famCount[a.fam] = (famCount[a.fam] || 0) + 1);
   const families = Object.entries(famCount).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count, pct: Math.round(count / N * 100), color: FAM_COLOR[name] || "var(--color-neutral-500)" }));
   const osC = {}; assets.forEach(a => osC[a.os] = (osC[a.os] || 0) + 1);
   const osSorted = Object.entries(osC).sort((a, b) => b[1] - a[1]);
   const maxOs = osSorted.length ? osSorted[0][1] : 1;
-  const osList = osSorted.slice(0, 10).map(([name, count]) => {
-    const a = assets.find(x => x.os === name); const e = isEol(name);
-    return { name, count, w: Math.round(count / maxOs * 100), eol: e, color: e ? CRIT : (FAM_COLOR[a.fam] || "var(--color-neutral-500)") };
-  });
+  const osList = osSorted.slice(0, 10).map(([name, count]) => { const a = assets.find(x => x.os === name); return { name, count, w: Math.round(count / maxOs * 100), color: FAM_COLOR[a.fam] || "var(--color-neutral-500)" }; });
   const tC = {}; assets.forEach(a => tC[a.type] = (tC[a.type] || 0) + 1);
   const types = Object.entries(tC).sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count, icon: ICON[name] }));
-  // trend from real first_seen
+  const svcC = {}; assets.forEach(a => a.ports.forEach(p => { const k = p.service || p.product || ("porta " + p.port); svcC[k] = (svcC[k] || 0) + 1; }));
+  const svcSorted = Object.entries(svcC).sort((a, b) => b[1] - a[1]);
+  const maxSvc = svcSorted.length ? svcSorted[0][1] : 1;
+  const services = svcSorted.slice(0, 10).map(([name, count]) => ({ name, count, w: Math.round(count / maxSvc * 100) }));
   const tot = [], nw = [];
   for (let d = 29; d >= 0; d--) { tot.push(assets.filter(a => a.discDays >= d).length); nw.push(assets.filter(a => a.discDays === d).length); }
   const mn = Math.max(0, Math.min(...tot) - 4), mx = Math.max(...tot) + 2, maxNew = Math.max(...nw, 1);
   const X = i => i * (600 / 29), Y = v => 170 - (v - mn) / Math.max(1, mx - mn) * 150;
   const line = tot.map((v, i) => `${i ? "L" : "M"}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(" ");
   const bars = nw.map((v, i) => ({ x: (X(i) - 5).toFixed(1), w: 10, h: (v / maxNew * 46).toFixed(1), y: (180 - v / maxNew * 46).toFixed(1) }));
-  const sub = SUBNETS.map(sn => {
-    const l = sn.list, m = l.filter(a => a.status === "Gerenciado").length, p = Math.round(m / l.length * 100), e = l.filter(a => a.eol).length;
-    return { id: sn.id, name: sn.name, cidr: sn.cidr, count: l.length, pct: p, color: p < 60 ? CRIT : p < 80 ? WARN : "var(--color-accent-400)", eol: e, eolColor: e ? "oklch(0.8 0.1 22)" : "var(--color-neutral-500)" };
-  });
-  const recent = [...assets].sort((a, b) => a.seenMin - b.seenMin).slice(0, 6).map(a => ({
-    id: a.id, icon: a.discDays < 7 ? "ph-plus-circle" : "ph-arrows-clockwise",
-    tone: a.discDays < 7 ? WARN : "var(--color-accent-400)",
-    title: `${a.discDays < 7 ? "Novo ativo" : "Visto"} · ${a.host}`, sub: `${a.type} · ${a.os} · ${a.ip}`,
-    when: a.discDays < 7 ? (a.discDays === 0 ? "hoje" : `há ${a.discDays} dias`) : fmtSeen(a.seenMin),
-  }));
-  const compliance = Math.round(assets.filter(a => a.status === "Gerenciado" && !a.eol && a.seenMin < 43200).length / N * 100);
-  const winSrv = assets.filter(a => a.eol && a.type === "Servidor").length;
-  const iotUn = assets.filter(a => a.status === "Não gerenciado" && a.cat === "IoT / periféricos").length;
+  const subnets = SUBNETS.map(sn => { const l = sn.list, ports = l.reduce((n, a) => n + a.portCount, 0); const svc = new Set(); l.forEach(a => a.ports.forEach(p => svc.add(p.service || p.product || p.port))); const maxC = Math.max(1, ...SUBNETS.map(x => x.list.length)); return { id: sn.id, name: sn.name, cidr: sn.cidr, count: l.length, w: Math.round(l.length / maxC * 100), ports, services: svc.size }; });
+  const recent = [...assets].sort((a, b) => a.seenMin - b.seenMin).slice(0, 6).map(a => ({ id: a.id, icon: a.icon, tone: "var(--color-accent-400)", title: a.host, sub: `${a.type} · ${a.os} · ${a.ip}`, when: fmtSeen(a.seenMin) }));
   return {
-    summary: `${assets.length} ativos mapeados em ${SUBNETS.length} sub-rede(s). ${pct}% estão sob gestão e ${eol} executam sistemas operacionais fora do ciclo de suporte do fabricante.`,
+    summary: `${assets.length} ativos mapeados em ${SUBNETS.length} sub-rede(s), com ${totalPorts} portas abertas em ${svcSorted.length} serviço(s) distinto(s).`,
     kpis: [
-      { icon: "ph-cube", label: "Ativos descobertos", value: assets.length, unit: "itens", sub: `+${novos} nos últimos 7 dias`, tone: "var(--color-accent)", f: "{}" },
-      { icon: "ph-check-circle", label: "Cobertura de gestão", value: pct, unit: "%", sub: `${unman} ativos não gerenciados`, tone: "var(--color-accent-300)", f: '{"fStatus":"Não gerenciado"}' },
-      { icon: "ph-warning", label: "SO sem suporte", value: eol, unit: "ativos", sub: `${Math.round(eol / N * 100)}% do parque em risco`, tone: CRIT, f: '{"fEol":true}' },
-      { icon: "ph-sparkle", label: "Novos (7 dias)", value: novos, unit: "ativos", sub: "aguardando classificação", tone: WARN, f: '{"fStatus":"Novo"}' },
+      { icon: "ph-cube", label: "Ativos descobertos", value: assets.length, unit: "itens", sub: `+${novos} nos últimos 7 dias`, tone: "var(--color-accent)", nav: "cmdb" },
+      { icon: "ph-plugs-connected", label: "Portas abertas", value: totalPorts, unit: "portas", sub: `${withPorts} ativos com portas`, tone: "var(--color-accent-300)", nav: "cmdb" },
+      { icon: "ph-tree-structure", label: "Sub-redes", value: SUBNETS.length, unit: "redes", sub: "descobertas na rede", tone: "var(--color-accent-400)", nav: "map" },
+      { icon: "ph-sparkle", label: "Novos (7 dias)", value: novos, unit: "ativos", sub: "descobertos recentemente", tone: WARN, nav: "cmdb" },
     ],
     families, osList, osVersions: osSorted.length, types, typeCount: types.length,
+    services, svcCount: svcSorted.length,
     line, area: line + " L600,180 L0,180 Z", bars, trendMax: mx, trendMin: mn, d0: dayLabel(29), d15: dayLabel(15),
-    alerts: [
-      { n: winSrv, tone: CRIT, title: "Servidores com SO sem suporte", sub: "Fora do ciclo de suporte do fabricante", f: '{"fType":"Servidor","fEol":true}' },
-      { n: eol, tone: CRIT, title: "Ativos com SO sem suporte", sub: "Priorizar atualização ou isolamento", f: '{"fEol":true}' },
-      { n: iotUn, tone: WARN, title: "Dispositivos não gerenciados", sub: "Sem hostname/SO identificado", f: '{"fStatus":"Não gerenciado"}' },
-      { n: stale, tone: WARN, title: "Ativos sem contato há mais de 30 dias", sub: "Candidatos a baixa ou revisão", f: '{"stale":true}' },
-    ],
-    compliance, subnets: sub, changes: recent,
+    subnets, recent,
   };
 }
 
@@ -234,7 +215,7 @@ function viewDash() {
   return `<div style="display:flex;flex-direction:column;gap:18px">
     <p style="margin:0;font-size:15px;color:var(--color-neutral-400);max-width:760px;text-wrap:pretty">${esc(d.summary)}</p>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px">
-      ${d.kpis.map(k => `<button onclick='App.filterTo(${k.f})' style="display:flex;flex-direction:column;gap:6px;text-align:left;padding:16px 18px;border:0;border-radius:var(--radius-md);background:var(--color-surface);box-shadow:var(--shadow-sm);color:var(--color-text);font:inherit;cursor:pointer">
+      ${d.kpis.map(k => `<button onclick="App.go('${k.nav}')" style="display:flex;flex-direction:column;gap:6px;text-align:left;padding:16px 18px;border:0;border-radius:var(--radius-md);background:var(--color-surface);box-shadow:var(--shadow-sm);color:var(--color-text);font:inherit;cursor:pointer">
         <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--color-neutral-400)"><i class="ph ${k.icon}" style="font-size:15px;color:${k.tone}"></i>${k.label}</div>
         <div style="display:flex;align-items:baseline;gap:8px"><span style="font-size:34px;font-weight:500;letter-spacing:-.02em;line-height:1.1">${k.value}</span><span style="font-size:13px;color:var(--color-neutral-500)">${k.unit}</span></div>
         <div style="font-size:12px;color:var(--color-neutral-500)">${esc(k.sub)}</div>
@@ -253,7 +234,7 @@ function viewDash() {
         </div>
         <div style="display:flex;flex-direction:column;gap:7px;margin-top:4px">
           ${d.osList.map(o => `<button onclick='App.filterTo({"search":${JSON.stringify(o.name)}})' style="display:grid;grid-template-columns:minmax(0,190px) minmax(0,1fr) 34px;align-items:center;gap:12px;border:0;background:transparent;color:var(--color-text);font:inherit;padding:2px 0;cursor:pointer;text-align:left">
-            <span style="font-size:13px;display:flex;align-items:center;gap:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(o.name)}${o.eol ? `<span style="font-size:10px;padding:1px 6px;border-radius:5px;color:oklch(0.8 0.1 22);background:color-mix(in oklch,oklch(0.72 0.14 22) 18%,transparent)">sem suporte</span>` : ""}</span>
+            <span style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(o.name)}</span>
             <span style="height:6px;border-radius:3px;background:var(--color-neutral-900)"><span style="display:block;height:100%;border-radius:3px;width:${o.w}%;background:${o.color}"></span></span>
             <span style="font-size:13px;text-align:right;color:var(--color-neutral-300)">${o.count}</span>
           </button>`).join("") || `<span style="font-size:13px;color:var(--color-neutral-500)">Sem dados</span>`}
@@ -261,18 +242,13 @@ function viewDash() {
       </section>
 
       <section style="${card}">
-        <div style="display:flex;align-items:baseline;gap:10px"><h4 style="margin:0;font-size:16px">Requer atenção</h4><span style="font-size:12px;color:var(--color-neutral-500)">riscos do inventário</span></div>
-        <div style="display:flex;flex-direction:column">
-          ${d.alerts.map(a => `<div style="display:flex;gap:14px;align-items:center;padding:12px 0;background:linear-gradient(to right,transparent,var(--color-divider) 48px,var(--color-divider) calc(100% - 48px),transparent) no-repeat bottom/100% 1px">
-            <span style="font-size:24px;font-weight:500;min-width:44px;color:${a.tone}">${a.n}</span>
-            <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px"><span style="font-size:13.5px">${esc(a.title)}</span><span style="font-size:12px;color:var(--color-neutral-500)">${esc(a.sub)}</span></div>
-            <button class="btn btn-ghost" onclick='App.filterTo(${a.f})' style="font-size:12.5px">Ver ativos<i class="ph ph-arrow-right"></i></button>
-          </div>`).join("")}
-        </div>
-        <div style="display:flex;align-items:center;gap:12px;margin-top:auto;padding:12px 14px;border-radius:var(--radius-md);background:var(--color-accent-900)">
-          <i class="ph ph-shield-check" style="font-size:20px;color:var(--color-accent-300)"></i>
-          <div style="flex:1;font-size:12.5px;color:var(--color-accent-200)">Índice de conformidade do parque</div>
-          <span style="font-size:20px;font-weight:500;color:var(--color-accent-100)">${d.compliance}%</span>
+        <div style="display:flex;align-items:baseline;gap:10px"><h4 style="margin:0;font-size:16px">Aplicações e serviços</h4><span style="font-size:12px;color:var(--color-neutral-500)">${d.svcCount} serviços em escuta</span></div>
+        <div style="display:flex;flex-direction:column;gap:7px;margin-top:2px">
+          ${d.services.map(sv => `<button onclick='App.filterTo({"search":${JSON.stringify(sv.name)}})' style="display:grid;grid-template-columns:minmax(0,190px) minmax(0,1fr) 34px;align-items:center;gap:12px;border:0;background:transparent;color:var(--color-text);font:inherit;padding:2px 0;cursor:pointer;text-align:left">
+            <span style="font-size:13px;display:flex;align-items:center;gap:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ph ph-plug" style="color:var(--color-accent-400)"></i>${esc(sv.name)}</span>
+            <span style="height:6px;border-radius:3px;background:var(--color-neutral-900)"><span style="display:block;height:100%;border-radius:3px;width:${sv.w}%;background:var(--color-accent-500)"></span></span>
+            <span style="font-size:13px;text-align:right;color:var(--color-neutral-300)">${sv.count}</span>
+          </button>`).join("") || `<span style="font-size:13px;color:var(--color-neutral-500);padding:10px 0">Nenhuma porta aberta detectada.</span>`}
         </div>
       </section>
     </div>
@@ -309,23 +285,24 @@ function viewDash() {
 
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:14px">
       <section style="${card.replace("gap:14px", "gap:8px")}">
-        <div style="display:flex;align-items:baseline;gap:10px"><h4 style="margin:0;font-size:16px">Cobertura por sub-rede</h4><button class="btn btn-ghost" onclick="App.go('map')" style="margin-left:auto;font-size:12.5px">Abrir mapa<i class="ph ph-arrow-right"></i></button></div>
+        <div style="display:flex;align-items:baseline;gap:10px"><h4 style="margin:0;font-size:16px">Ativos por sub-rede</h4><button class="btn btn-ghost" onclick="App.go('map')" style="margin-left:auto;font-size:12.5px">Abrir mapa<i class="ph ph-arrow-right"></i></button></div>
         <table class="table" style="font-size:13px">
-          <thead><tr><th>Sub-rede</th><th>Ativos</th><th style="width:38%">Gerenciados</th><th>Sem suporte</th></tr></thead>
+          <thead><tr><th>Sub-rede</th><th>Ativos</th><th style="width:34%">Distribuição</th><th>Portas</th><th>Serviços</th></tr></thead>
           <tbody>
-            ${d.subnets.map(s => `<tr onclick='App.go("map",{"focus":${JSON.stringify(s.id)}})' style="cursor:pointer">
-              <td><div style="display:flex;flex-direction:column"><span>${esc(s.name)}</span><span style="font-size:11.5px;color:var(--color-neutral-500);font-family:ui-monospace,monospace">${esc(s.cidr)}</span></div></td>
-              <td>${s.count}</td>
-              <td><div style="display:flex;align-items:center;gap:10px"><span style="flex:1;height:6px;border-radius:3px;background:var(--color-neutral-900)"><span style="display:block;height:100%;border-radius:3px;width:${s.pct}%;background:${s.color}"></span></span><span style="width:34px;text-align:right">${s.pct}%</span></div></td>
-              <td style="color:${s.eolColor}">${s.eol}</td>
+            ${d.subnets.map(sv => `<tr onclick='App.go("map",{"focus":${JSON.stringify(sv.id)}})' style="cursor:pointer">
+              <td><div style="display:flex;flex-direction:column"><span>${esc(sv.name)}</span><span style="font-size:11.5px;color:var(--color-neutral-500);font-family:ui-monospace,monospace">${esc(sv.cidr)}</span></div></td>
+              <td>${sv.count}</td>
+              <td><span style="display:block;height:6px;border-radius:3px;background:var(--color-neutral-900)"><span style="display:block;height:100%;border-radius:3px;width:${sv.w}%;background:var(--color-accent-500)"></span></span></td>
+              <td style="color:var(--color-neutral-300)">${sv.ports}</td>
+              <td style="color:var(--color-neutral-300)">${sv.services}</td>
             </tr>`).join("")}
           </tbody>
         </table>
       </section>
       <section style="${card.replace("gap:14px", "gap:8px")}">
-        <div style="display:flex;align-items:baseline;gap:10px"><h4 style="margin:0;font-size:16px">Mudanças recentes</h4><span style="font-size:12px;color:var(--color-neutral-500)">detectadas pelas varreduras</span></div>
+        <div style="display:flex;align-items:baseline;gap:10px"><h4 style="margin:0;font-size:16px">Ativos recentes</h4><span style="font-size:12px;color:var(--color-neutral-500)">vistos nas varreduras</span></div>
         <div style="display:flex;flex-direction:column">
-          ${d.changes.map(c => `<div onclick="App.openDrawer('${c.id}')" style="display:flex;gap:12px;align-items:center;padding:9px 0;cursor:pointer;background:linear-gradient(to right,transparent,color-mix(in srgb,var(--color-text) 8%,transparent) 48px,color-mix(in srgb,var(--color-text) 8%,transparent) calc(100% - 48px),transparent) no-repeat bottom/100% 1px">
+          ${d.recent.map(c => `<div onclick="App.openDrawer('${c.id}')" style="display:flex;gap:12px;align-items:center;padding:9px 0;cursor:pointer;background:linear-gradient(to right,transparent,color-mix(in srgb,var(--color-text) 8%,transparent) 48px,color-mix(in srgb,var(--color-text) 8%,transparent) calc(100% - 48px),transparent) no-repeat bottom/100% 1px">
             <div style="width:30px;height:30px;flex:none;border-radius:var(--radius-md);display:grid;place-items:center;background:var(--color-bg);color:${c.tone}"><i class="ph ${c.icon}"></i></div>
             <div style="flex:1;min-width:0;display:flex;flex-direction:column"><span style="font-size:13px">${esc(c.title)}</span><span style="font-size:12px;color:var(--color-neutral-500)">${esc(c.sub)}</span></div>
             <span style="font-size:11.5px;color:var(--color-neutral-500);white-space:nowrap">${esc(c.when)}</span>
