@@ -31,6 +31,7 @@ const state = {
 
 let ASSETS = [];
 let SUBNETS = [];
+let INSTALL_TOKEN = "";
 let AGENTS = [];
 let byId = {};
 
@@ -637,13 +638,21 @@ function viewScan() {
             <span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500)">Requisitos</span>
             <span style="font-size:12.5px;color:var(--color-neutral-300)">Python 3 · privilégio root / <code style="font-family:ui-monospace,monospace">CAP_NET_RAW</code> (ICMP e descoberta TCP)</span>
           </div>
+          <div style="display:flex;flex-direction:column;gap:5px">
+            <span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500)">Token de instalação</span>
+            <div style="display:flex;align-items:center;gap:8px">
+              <code style="font-family:ui-monospace,monospace;font-size:12.5px;background:var(--color-bg);padding:7px 10px;border-radius:var(--radius-md);color:var(--color-accent-200);user-select:all;word-break:break-all">${INSTALL_TOKEN ? esc(INSTALL_TOKEN) : "—"}</code>
+              <button class="btn btn-secondary btn-icon" title="Copiar token" onclick="App.copy(${JSON.stringify(INSTALL_TOKEN)})"><i class="ph ph-copy"></i></button>
+            </div>
+            <span style="font-size:11px;color:var(--color-neutral-600)">Configurado na plataforma (NTM_INSTALL_TOKEN). É o mesmo para todos os coletores.</span>
+          </div>
           <a class="btn btn-primary" href="/ntm_agent.py" download="ntm_agent.py" style="align-self:flex-start"><i class="ph ph-download-simple"></i>Baixar agente</a>
         </div>
         <div style="flex:1;min-width:320px;display:flex;flex-direction:column;gap:6px">
           <span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500)">Instalação (host Linux)</span>
           <pre style="margin:0;background:var(--color-bg);border-radius:var(--radius-md);padding:12px 14px;font-family:ui-monospace,monospace;font-size:12px;color:var(--color-neutral-300);overflow-x:auto;white-space:pre;line-height:1.6">sudo apt-get install -y python3
-export NTM_PLATFORM_URL=https://&lt;plataforma&gt;:8443
-export NTM_INSTALL_TOKEN=&lt;token-de-instalação&gt;
+export NTM_PLATFORM_URL=${esc(location.origin)}
+export NTM_INSTALL_TOKEN=${esc(INSTALL_TOKEN || "<token-de-instalação>")}
 sudo -E python3 ntm_agent.py</pre>
           <span style="font-size:11.5px;color:var(--color-neutral-500)">O coletor só precisa da URL da plataforma e do token. <strong style="color:var(--color-neutral-400);font-weight:500">O range a varrer é definido aqui na plataforma</strong>, por varredura (campo Escopo). Em produção, instale como serviço (systemd).</span>
         </div>
@@ -694,6 +703,7 @@ const App = {
   showMore() { state.limit += 40; render(); },
   openDrawer(id) { state.drawer = id; render(); },
   closeDrawer() { state.drawer = null; render(); },
+  copy(txt) { if (!txt) return; (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).catch(() => { const t = document.createElement("textarea"); t.value = txt; document.body.appendChild(t); t.select(); try { document.execCommand("copy"); } catch (e) {} t.remove(); }); },
   setAgent(id) { state.agentId = id; render(); },
   onRange(v) { state.range = v; },
   useRange(v) { state.range = v; const f = document.getElementById("rangeField"); if (f) f.value = v; },
@@ -750,6 +760,7 @@ setInterval(() => {
 
 async function boot() {
   wireHeader();
+  try { INSTALL_TOKEN = (await getJSON(`${API}/install-info`)).install_token || ""; } catch (e) { /* optional */ }
   await refresh();
 }
 document.addEventListener("DOMContentLoaded", boot);

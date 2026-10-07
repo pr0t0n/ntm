@@ -48,6 +48,9 @@ func (s *Server) Routes(web http.Handler) http.Handler {
 	mux.HandleFunc("GET /api/v1/hosts/{id}", s.handleHost)
 	mux.HandleFunc("GET /api/v1/network-map", s.handleMap)
 	mux.HandleFunc("POST /api/v1/reset", s.handleReset)
+	mux.HandleFunc("GET /api/v1/install-info", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"install_token": s.cfg.InstallToken})
+	})
 	mux.HandleFunc("GET /api/v1/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
