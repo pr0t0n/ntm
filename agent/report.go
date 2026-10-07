@@ -40,42 +40,44 @@ type dnsRecord struct {
 	Value  string `json:"value"`
 }
 
-type scanReport struct {
+type phaseReport struct {
+	Phase string         `json:"phase"`
 	Hosts []reportedHost `json:"hosts"`
 	DNS   []dnsRecord    `json:"dns"`
 }
 
-func buildReport(hosts []scanner.Host, dns []scanner.DNSRecord) scanReport {
-	rep := scanReport{}
+func toReported(h scanner.Host) reportedHost {
+	rh := reportedHost{
+		IP:       h.IP,
+		Hostname: h.Hostname,
+		Status:   orDefault(h.Status, "up"),
+		MAC:      h.MAC,
+		Vendor:   h.Vendor,
+		OSGuess:  h.OSGuess,
+	}
+	for _, p := range h.Ports {
+		rh.Ports = append(rh.Ports, reportedPort{
+			Port: p.Port, Protocol: p.Protocol, State: p.State,
+			Service: p.Service, Product: p.Product, Version: p.Version,
+		})
+	}
+	return rh
+}
+
+// uploadPhase stores one batch of a discovery phase on the platform.
+func uploadPhase(client *http.Client, cfg agentConfig, state agentState, phase string, hosts []scanner.Host, dns []scanner.DNSRecord) error {
+	rep := phaseReport{Phase: phase}
 	for _, h := range hosts {
-		rh := reportedHost{
-			IP:       h.IP,
-			Hostname: h.Hostname,
-			Status:   orDefault(h.Status, "up"),
-			MAC:      h.MAC,
-			Vendor:   h.Vendor,
-			OSGuess:  h.OSGuess,
-		}
-		for _, p := range h.Ports {
-			rh.Ports = append(rh.Ports, reportedPort{
-				Port: p.Port, Protocol: p.Protocol, State: p.State,
-				Service: p.Service, Product: p.Product, Version: p.Version,
-			})
-		}
-		rep.Hosts = append(rep.Hosts, rh)
+		rep.Hosts = append(rep.Hosts, toReported(h))
 	}
 	for _, d := range dns {
 		rep.DNS = append(rep.DNS, dnsRecord{HostIP: d.HostIP, Name: d.Name, Type: d.Type, Value: d.Value})
 	}
-	return rep
-}
-
-func uploadReport(client *http.Client, cfg agentConfig, state agentState, rep scanReport) error {
 	body, err := json.Marshal(rep)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest(http.MethodPost, cfg.PlatformURL+"/api/v1/scan-results", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, cfg.PlatformURL+"/api/v1/scan-phase", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -93,11 +95,11 @@ func uploadReport(client *http.Client, cfg agentConfig, state agentState, rep sc
 	return nil
 }
 
-// reportStatus notifies the platform of a scan state change (running | idle) so
-// the UI can show the running state and elapsed time. Best-effort; errors are
-// non-fatal because the eventual report upload also resets state.
-func reportStatus(client *http.Client, cfg agentConfig, state agentState, st string) {
-	body, _ := json.Marshal(map[string]string{"state": st})
+// reportStatus notifies the platform of a scan state change so the UI can show
+// the running state, the current phase (ping | hostname | ports | detect) and
+// elapsed time. Best-effort; errors are non-fatal.
+func reportStatus(client *http.Client, cfg agentConfig, state agentState, st, phase string) {
+	body, _ := json.Marshal(map[string]string{"state": st, "phase": phase})
 	req, err := http.NewRequest(http.MethodPost, cfg.PlatformURL+"/api/v1/agent/status", bytes.NewReader(body))
 	if err != nil {
 		return

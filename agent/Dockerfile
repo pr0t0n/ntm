@@ -1,17 +1,8 @@
-# --- build stage ---
-FROM golang:1.23-alpine AS build
-WORKDIR /src
-COPY go.mod ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/ntm-agent .
-
-# --- runtime stage ---
-# nmap is the standard discovery tool the agent orchestrates for authorized
-# asset inventory of the operator's own network.
-FROM alpine:3.20
-RUN apk add --no-cache nmap nmap-scripts ca-certificates
+# NTM discovery agent (Python). Ping and port scan are implemented in Python
+# (stdlib only); no nmap. The ICMP ping sweep needs a raw socket, so the
+# container is granted NET_RAW in docker-compose.yml.
+FROM python:3.12-alpine
 WORKDIR /app
-COPY --from=build /out/ntm-agent /app/ntm-agent
+COPY ntm_agent.py /app/ntm_agent.py
 RUN mkdir -p /var/lib/ntm
-ENTRYPOINT ["/app/ntm-agent"]
+ENTRYPOINT ["python3", "/app/ntm_agent.py"]

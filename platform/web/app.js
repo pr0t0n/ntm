@@ -23,6 +23,7 @@ function switchView(view) {
   if (view === "dashboard") loadDashboard();
   if (view === "map") loadMap();
   if (view === "cmdb") search();
+  if (view === "scan") loadScan();
 }
 
 document.querySelectorAll(".nav-item").forEach(btn =>
@@ -54,6 +55,11 @@ async function loadDashboard() {
   safe(() => drawDoughnut("chartOS", d.by_os || {}, (k, i) => OS_COLORS[i % OS_COLORS.length], k => k));
   safe(() => drawApps(d.top_apps || []));
   fillRecent(d.recent || []);
+  ensurePolling();
+}
+
+// loadScan drives the Varredura view's agent list and runner.
+async function loadScan() {
   loadAgents();
 }
 
@@ -65,6 +71,7 @@ function safe(fn) {
 let agentsById = {};     // id -> agent snapshot from the last poll
 let runnerTimer = null;  // 1s ticker that refreshes the "executing (mm:ss)" label
 let agentsPoll = null;   // periodic server refresh while on the dashboard
+let lastProgress = null; // agents' phase/host-count signature from the last poll
 
 async function loadAgents() {
   let data;
@@ -75,6 +82,7 @@ async function loadAgents() {
   const agents = data.agents || [];
   agentsById = {};
   agents.forEach(a => { agentsById[a.id] = a; });
+  setText("agentStatus", `${agents.filter(a => a.online).length} de ${agents.length} agente(s) online`);
 
   if (agents.length === 0) {
     sel.innerHTML = `<option value="">Nenhum agente registrado</option>`;
@@ -90,6 +98,17 @@ async function loadAgents() {
   }
   updateRunnerUI();
   ensurePolling();
+
+  // Each phase stores its results as it runs: when a phase advances or more
+  // hosts are found, refresh the dashboard so the stored data shows up live.
+  const progress = agents.map(a => `${a.id}:${a.scan_state}:${a.scan_phase}:${a.scan_hosts}`).join("|");
+  if (lastProgress !== null && progress !== lastProgress &&
+      document.querySelector(".nav-item.active").dataset.view === "dashboard") {
+    lastProgress = progress;
+    loadDashboard();
+    return;
+  }
+  lastProgress = progress;
 }
 
 // localPending tracks agents the user just asked to run, so the UI shows a
@@ -106,6 +125,8 @@ function updateRunnerUI() {
   const stopBtn = document.getElementById("stopBtn");
   const msg = document.getElementById("runnerMsg");
   const a = agentsById[sel.value];
+  updateScanProgress(a);
+  updateAgentMeta(a);
   if (!a) { runBtn.textContent = "▶ RODAR"; runBtn.disabled = false; stopBtn.classList.add("hidden"); return; }
 
   const running = a.scan_state === "running";
@@ -127,13 +148,59 @@ function updateRunnerUI() {
     setMsg(msg, "Scan solicitado — o agente inicia no próximo ciclo.", "ok");
   } else {
     runBtn.textContent = "▶ RODAR";
-    if (msg.textContent.startsWith("Iniciado") || msg.textContent.startsWith("Scan solicitado")) setMsg(msg, "", "");
+    // Keep stop/error feedback visible; otherwise summarize the last scan.
+    if (!msg.classList.contains("err")) {
+      setMsg(msg, hasTime(a.last_scan_at) ? `Último scan: ${a.scan_hosts} host(s) encontrado(s)` : "", "");
+    }
+  }
+}
+
+// Discovery phases reported by the agent, in execution order.
+const PHASES = ["ping", "hostname", "ports", "detect"];
+
+// updateScanProgress shows the running scan's phase (1-4), total and per-phase
+// elapsed time, and how many live hosts the ping phase has stored so far.
+function updateScanProgress(a) {
+  const box = document.getElementById("scanProgress");
+  const running = a && a.scan_state === "running";
+  box.classList.toggle("hidden", !running);
+  if (!running) return;
+  const current = PHASES.indexOf(a.scan_phase);
+  box.querySelectorAll(".phases li").forEach(li => {
+    const i = PHASES.indexOf(li.dataset.phase);
+    li.classList.toggle("done", current >= 0 && i < current);
+    li.classList.toggle("active", i === current);
+  });
+  setText("spTotal", hasTime(a.scan_started_at) ? fmtElapsed(Date.now() - new Date(a.scan_started_at)) : "—");
+  setText("spPhase", hasTime(a.phase_started_at) ? fmtElapsed(Date.now() - new Date(a.phase_started_at)) : "—");
+  setText("spHosts", (a.scan_hosts || 0).toLocaleString("pt-BR"));
+}
+
+function hasTime(t) { return t && !t.startsWith("0001"); }
+
+// updateAgentMeta fills the agent IP and the suggested range, and prefills the
+// editable range input the first time an agent is selected.
+let rangeTouchedFor = null;
+function updateAgentMeta(a) {
+  const ipEl = document.getElementById("agentIp");
+  const sugEl = document.getElementById("suggestedRange");
+  const input = document.getElementById("rangeInput");
+  if (!ipEl) return;
+  ipEl.textContent = a && a.ip ? a.ip : "—";
+  const suggestion = (a && a.suggested_range) || "";
+  sugEl.textContent = suggestion || "—";
+  // Prefill once per agent selection; respect the user's edits afterward.
+  if (a && rangeTouchedFor !== a.id && document.activeElement !== input) {
+    if (input.value.trim() === "" || rangeTouchedFor !== a.id) input.value = suggestion;
+    rangeTouchedFor = a.id;
   }
 }
 
 function fmtElapsed(ms) {
   const s = Math.max(0, Math.floor(ms / 1000));
-  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  const mmss = `${String(m).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  return h > 0 ? `${h}:${mmss}` : mmss;
 }
 
 // ensurePolling keeps the runner live: a 1s ticker updates the elapsed label and
@@ -141,7 +208,9 @@ function fmtElapsed(ms) {
 function ensurePolling() {
   if (!runnerTimer) runnerTimer = setInterval(updateRunnerUI, 1000);
   if (!agentsPoll) agentsPoll = setInterval(() => {
-    if (document.querySelector(".nav-item.active").dataset.view === "dashboard") loadAgents();
+    const v = document.querySelector(".nav-item.active").dataset.view;
+    if (v === "scan") loadAgents();
+    else if (v === "dashboard") loadDashboard();
   }, 4000);
 }
 
@@ -150,10 +219,14 @@ async function runAgent() {
   const id = sel.value;
   const msg = document.getElementById("runnerMsg");
   if (!id) { setMsg(msg, "Selecione um agente.", "err"); return; }
+  const range = document.getElementById("rangeInput").value.trim();
   localPending[id] = true;         // optimistic: show pending at once
   updateRunnerUI();
   try {
-    const r = await fetch(`${API}/agents/${id}/run`, { method: "POST" });
+    const r = await fetch(`${API}/agents/${id}/run`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ range }),
+    });
     if (!r.ok) throw new Error(await r.text());
     loadAgents();
     // Refresh inventory once the agent has had time to scan and report.
@@ -264,6 +337,29 @@ async function search() {
     tr.addEventListener("click", () => showHost(tr.dataset.id)));
 }
 
+// Wipes the whole inventory on the platform (hosts, ports, DNS). Agents stay
+// enrolled and repopulate the base on their next scan.
+document.getElementById("resetBtn").addEventListener("click", resetInventory);
+
+async function resetInventory() {
+  if (!confirm("Apagar TODAS as informações gravadas na plataforma (ativos, portas e DNS)?\n\nOs agentes continuam cadastrados e repovoam a base na próxima varredura. Esta ação não pode ser desfeita.")) return;
+  const btn = document.getElementById("resetBtn");
+  btn.disabled = true;
+  try {
+    const r = await fetch(`${API}/reset`, { method: "POST" });
+    if (!r.ok) throw new Error(await r.text());
+    const res = await r.json();
+    document.getElementById("searchInput").value = "";
+    await search();
+    setText("searchCount", `Base resetada — ${res.hosts} ativo(s), ${res.ports} porta(s) e ${res.dns} registro(s) DNS apagados`);
+  } catch (e) {
+    console.error(e);
+    alert("Falha ao resetar a base.");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 async function showHost(id) {
   let h;
   try { h = await getJSON(`${API}/hosts/${id}`); }
@@ -342,10 +438,35 @@ function esc(s) {
 // Boot — supports deep-linking via #dashboard | #map | #cmdb
 function boot() {
   const v = (location.hash || "#dashboard").slice(1);
-  switchView(["dashboard", "map", "cmdb"].includes(v) ? v : "dashboard");
+  switchView(["dashboard", "map", "cmdb", "scan"].includes(v) ? v : "dashboard");
 }
 window.addEventListener("hashchange", boot);
 document.getElementById("runBtn").addEventListener("click", runAgent);
 document.getElementById("stopBtn").addEventListener("click", stopAgent);
-document.getElementById("agentSelect").addEventListener("change", updateRunnerUI);
+document.getElementById("agentSelect").addEventListener("change", () => { rangeTouchedFor = null; updateRunnerUI(); });
+document.getElementById("useSuggested").addEventListener("click", () => {
+  const a = agentsById[document.getElementById("agentSelect").value];
+  if (a && a.suggested_range) document.getElementById("rangeInput").value = a.suggested_range;
+});
+document.getElementById("removeAgent").addEventListener("click", removeAgent);
+
+async function removeAgent() {
+  const sel = document.getElementById("agentSelect");
+  const a = agentsById[sel.value];
+  if (!a) return;
+  if (!confirm(`Remover o agente #${a.id} ${a.name} da plataforma?\n\nOs ativos já descobertos são mantidos.`)) return;
+  const btn = document.getElementById("removeAgent");
+  btn.disabled = true;
+  try {
+    const r = await fetch(`${API}/agents/${a.id}`, { method: "DELETE" });
+    if (!r.ok) throw new Error(await r.text());
+    rangeTouchedFor = null;
+    await loadAgents();
+  } catch (e) {
+    console.error(e);
+    alert("Falha ao remover o agente.");
+  } finally {
+    btn.disabled = false;
+  }
+}
 boot();

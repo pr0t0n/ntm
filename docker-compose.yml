@@ -52,11 +52,14 @@ services:
       NTM_SCAN_INTERVAL: "${NTM_SCAN_INTERVAL:-30m}"
       NTM_POLL_INTERVAL: "${NTM_POLL_INTERVAL:-5s}"  # how fast on-demand runs/stops are picked up
       NTM_TLS_INSECURE: "true"   # self-signed platform cert in the lab
-      # Phase 1: host discovery (ICMP + TCP SYN/ACK probes). Phase 2 service-scans
-      # only live hosts with a SYN scan (needs NET_RAW) and a per-host timeout so
-      # no single host can stall the whole run.
-      NTM_DISCOVERY_FLAGS: "${NTM_DISCOVERY_FLAGS:-}"
-      NTM_NMAP_FLAGS: "${NTM_NMAP_FLAGS:--sS -sV --top-ports 100 --open -T4 -n --host-timeout 60s --max-retries 2}"
+      # Phased discovery (pure Python, no nmap), each phase stored as it runs:
+      #   1 ping (native ICMP echo; needs NET_RAW) -> 2 hostname (reverse DNS) ->
+      #   3 ports (Python TCP connect scan + banner / HTTP Server grab) ->
+      #   4 detect (OS from ping TTL refined by banners + published platform).
+      NTM_PING_RATE: "${NTM_PING_RATE:-1000}"             # ICMP echo requests per second
+      NTM_PING_TIMEOUT: "${NTM_PING_TIMEOUT:-2s}"         # wait for late replies
+      NTM_PORT_WORKERS: "${NTM_PORT_WORKERS:-200}"        # concurrent TCP connect probes
+      NTM_CONNECT_TIMEOUT: "${NTM_CONNECT_TIMEOUT:-1.0}"  # per-port connect timeout (s)
     volumes:
       - ntm-agent-state:/var/lib/ntm
     networks:

@@ -5,3 +5,7 @@ platform/certs/
 .env
 # build artifacts
 /tmp/ntm-*
+
+# Python
+__pycache__/
+*.pyc

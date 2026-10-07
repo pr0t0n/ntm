@@ -55,7 +55,12 @@ func (s *Store) migrate(ctx context.Context) error {
 		ALTER TABLE agents ADD COLUMN IF NOT EXISTS stop_requested BOOLEAN NOT NULL DEFAULT false;
 		ALTER TABLE agents ADD COLUMN IF NOT EXISTS scan_state TEXT NOT NULL DEFAULT 'idle';
 		ALTER TABLE agents ADD COLUMN IF NOT EXISTS scan_started_at TIMESTAMPTZ;
-		ALTER TABLE agents ADD COLUMN IF NOT EXISTS last_scan_at TIMESTAMPTZ;`)
+		ALTER TABLE agents ADD COLUMN IF NOT EXISTS last_scan_at TIMESTAMPTZ;
+		ALTER TABLE agents ADD COLUMN IF NOT EXISTS scan_phase TEXT NOT NULL DEFAULT '';
+		ALTER TABLE agents ADD COLUMN IF NOT EXISTS phase_started_at TIMESTAMPTZ;
+		ALTER TABLE agents ADD COLUMN IF NOT EXISTS scan_hosts INT NOT NULL DEFAULT 0;
+		ALTER TABLE agents ADD COLUMN IF NOT EXISTS ip TEXT NOT NULL DEFAULT '';
+		ALTER TABLE agents ADD COLUMN IF NOT EXISTS scan_range TEXT NOT NULL DEFAULT '';`)
 	return err
 }
 
@@ -153,6 +158,27 @@ func (s *Store) TouchAgent(ctx context.Context, id int64) {
 	_, _ = s.pool.Exec(ctx, `UPDATE agents SET last_seen=now() WHERE id=$1`, id)
 }
 
+// SetAgentIP records the agent's own (self-reported) primary IP, used to suggest
+// a scan range in the UI.
+func (s *Store) SetAgentIP(ctx context.Context, id int64, ip string) {
+	if ip == "" {
+		return
+	}
+	_, _ = s.pool.Exec(ctx, `UPDATE agents SET ip=$2 WHERE id=$1`, id, ip)
+}
+
+// DeleteAgent removes an enrolled agent. Discovered hosts are left in place.
+func (s *Store) DeleteAgent(ctx context.Context, id int64) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM agents WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) CountAgents(ctx context.Context) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM agents`).Scan(&n)
@@ -163,7 +189,8 @@ func (s *Store) CountAgents(ctx context.Context) (int, error) {
 func (s *Store) ListAgents(ctx context.Context) ([]models.Agent, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, name, ranges, COALESCE(last_seen, 'epoch'::timestamptz),
-		        last_scan_at, scan_requested, scan_state, scan_started_at, created_at
+		        last_scan_at, scan_requested, scan_state, scan_started_at, created_at,
+		        scan_phase, phase_started_at, scan_hosts, ip, scan_range
 		 FROM agents ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -173,9 +200,10 @@ func (s *Store) ListAgents(ctx context.Context) ([]models.Agent, error) {
 	for rows.Next() {
 		var a models.Agent
 		var ranges string
-		var lastScan, startedAt *time.Time
+		var lastScan, startedAt, phaseAt *time.Time
 		if err := rows.Scan(&a.ID, &a.Name, &ranges, &a.LastSeen, &lastScan,
-			&a.ScanRequested, &a.ScanState, &startedAt, &a.CreatedAt); err != nil {
+			&a.ScanRequested, &a.ScanState, &startedAt, &a.CreatedAt,
+			&a.ScanPhase, &phaseAt, &a.ScanHosts, &a.IP, &a.ScanRange); err != nil {
 			return nil, err
 		}
 		if ranges != "" {
@@ -187,15 +215,19 @@ func (s *Store) ListAgents(ctx context.Context) ([]models.Agent, error) {
 		if startedAt != nil {
 			a.ScanStartedAt = *startedAt
 		}
+		if phaseAt != nil {
+			a.PhaseStartedAt = *phaseAt
+		}
 		a.Online = time.Since(a.LastSeen) < 90*time.Second
 		out = append(out, a)
 	}
 	return out, rows.Err()
 }
 
-// RequestScan flags an agent to run a scan on its next poll.
-func (s *Store) RequestScan(ctx context.Context, id int64) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE agents SET scan_requested=true WHERE id=$1`, id)
+// RequestScan flags an agent to run a scan on its next poll, over the given
+// range (empty = the agent's configured ranges).
+func (s *Store) RequestScan(ctx context.Context, id int64, scanRange string) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE agents SET scan_requested=true, scan_range=$2 WHERE id=$1`, id, scanRange)
 	if err != nil {
 		return err
 	}
@@ -221,40 +253,83 @@ func (s *Store) RequestStop(ctx context.Context, id int64) error {
 // ConsumeCommands atomically returns and clears pending scan/stop commands. When
 // a scan is granted, the agent is moved into the 'running' state with a start
 // timestamp so the UI can show elapsed time.
-func (s *Store) ConsumeCommands(ctx context.Context, id int64) (scanNow, stopNow bool, err error) {
-	var dummy bool
+func (s *Store) ConsumeCommands(ctx context.Context, id int64) (scanNow, stopNow bool, scanRange string, err error) {
 	e1 := s.pool.QueryRow(ctx,
 		`UPDATE agents SET scan_requested=false
-		 WHERE id=$1 AND scan_requested=true RETURNING true`, id).Scan(&dummy)
+		 WHERE id=$1 AND scan_requested=true RETURNING COALESCE(scan_range,'')`, id).Scan(&scanRange)
 	if e1 == nil {
 		scanNow = true
 	} else if !errors.Is(e1, pgx.ErrNoRows) {
-		return false, false, e1
+		return false, false, "", e1
 	}
 
+	var dummy bool
 	e2 := s.pool.QueryRow(ctx,
 		`UPDATE agents SET stop_requested=false WHERE id=$1 AND stop_requested=true RETURNING true`, id).Scan(&dummy)
 	if e2 == nil {
 		stopNow = true
 	} else if !errors.Is(e2, pgx.ErrNoRows) {
-		return scanNow, false, e2
+		return scanNow, false, "", e2
 	}
-	return scanNow, stopNow, nil
+	return scanNow, stopNow, scanRange, nil
 }
 
 // SetRunning marks an agent as actively scanning (reported by the agent when a
-// scan begins, regardless of whether it was on-demand or scheduled).
+// scan begins, regardless of whether it was on-demand or scheduled) and resets
+// the per-scan phase and host counter.
 func (s *Store) SetRunning(ctx context.Context, id int64) {
 	_, _ = s.pool.Exec(ctx,
-		`UPDATE agents SET scan_state='running', scan_started_at=now() WHERE id=$1`, id)
+		`UPDATE agents SET scan_state='running', scan_started_at=now(),
+		        scan_phase='', phase_started_at=NULL, scan_hosts=0 WHERE id=$1`, id)
+}
+
+// SetPhase records which discovery phase (ping | hostname | ports | detect) the
+// agent has entered, so the UI can show the phase and its elapsed time.
+func (s *Store) SetPhase(ctx context.Context, id int64, phase string) {
+	_, _ = s.pool.Exec(ctx,
+		`UPDATE agents SET scan_state='running', scan_phase=$2, phase_started_at=now(),
+		        scan_started_at=COALESCE(scan_started_at, now()) WHERE id=$1`, id, phase)
+}
+
+// AddScanHosts increments the number of live hosts found in the current scan.
+func (s *Store) AddScanHosts(ctx context.Context, id int64, n int) {
+	_, _ = s.pool.Exec(ctx, `UPDATE agents SET scan_hosts=scan_hosts+$2 WHERE id=$1`, id, n)
 }
 
 // MarkScanDone records that an agent finished (uploaded a report), returning to
 // the idle state.
 func (s *Store) MarkScanDone(ctx context.Context, id int64) {
 	_, _ = s.pool.Exec(ctx,
-		`UPDATE agents SET last_scan_at=now(), scan_state='idle',
-		        scan_started_at=NULL, stop_requested=false WHERE id=$1`, id)
+		`UPDATE agents SET last_scan_at=now(), scan_state='idle', scan_started_at=NULL,
+		        scan_phase='', phase_started_at=NULL, stop_requested=false WHERE id=$1`, id)
+}
+
+// ResetInventory wipes every discovered record (hosts, ports, DNS) and clears
+// each agent's scan state. Agents stay enrolled so their tokens keep working —
+// deleting them would leave running agents stuck on 401 with no re-enrollment.
+func (s *Store) ResetInventory(ctx context.Context) (models.ResetResult, error) {
+	var res models.ResetResult
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return res, err
+	}
+	defer tx.Rollback(ctx)
+
+	if err := tx.QueryRow(ctx,
+		`SELECT (SELECT count(*) FROM hosts), (SELECT count(*) FROM ports), (SELECT count(*) FROM dns_records)`).
+		Scan(&res.Hosts, &res.Ports, &res.DNS); err != nil {
+		return res, err
+	}
+	if _, err := tx.Exec(ctx, `TRUNCATE ports, hosts, dns_records RESTART IDENTITY`); err != nil {
+		return res, err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE agents SET last_scan_at=NULL, scan_state='idle', scan_started_at=NULL,
+		        scan_phase='', phase_started_at=NULL, scan_hosts=0,
+		        scan_requested=false, stop_requested=false`); err != nil {
+		return res, err
+	}
+	return res, tx.Commit(ctx)
 }
 
 // --- Hosts / ingest ---
@@ -301,6 +376,118 @@ func (s *Store) UpsertHost(ctx context.Context, h models.ReportedHost, assetType
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// --- Phased ingest: each discovery phase stores its own slice of host data ---
+
+// UpsertPingHost stores a host that answered the phase-1 ping. It only touches
+// liveness/L2 fields, so data from later phases of earlier scans is preserved.
+func (s *Store) UpsertPingHost(ctx context.Context, h models.ReportedHost, agentID int64) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO hosts (ip, status, mac, vendor, agent_id, last_seen)
+		 VALUES ($1,'up',$2,$3,$4, now())
+		 ON CONFLICT (ip) DO UPDATE SET
+		    status   = 'up',
+		    mac      = CASE WHEN EXCLUDED.mac <> '' THEN EXCLUDED.mac ELSE hosts.mac END,
+		    vendor   = CASE WHEN EXCLUDED.vendor <> '' THEN EXCLUDED.vendor ELSE hosts.vendor END,
+		    agent_id = EXCLUDED.agent_id,
+		    last_seen = now()`,
+		h.IP, h.MAC, h.Vendor, agentID)
+	return err
+}
+
+// SetHostname stores the phase-2 hostname of a known host.
+func (s *Store) SetHostname(ctx context.Context, ip, hostname string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE hosts SET hostname=$2, last_seen=now() WHERE ip=$1`, ip, hostname)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ReplacePorts stores the phase-3 open-port set of a known host.
+func (s *Store) ReplacePorts(ctx context.Context, ip string, ports []models.ReportedPort) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var hostID int64
+	err = tx.QueryRow(ctx, `UPDATE hosts SET last_seen=now() WHERE ip=$1 RETURNING id`, ip).Scan(&hostID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM ports WHERE host_id=$1`, hostID); err != nil {
+		return err
+	}
+	for _, p := range ports {
+		if _, err = tx.Exec(ctx,
+			`INSERT INTO ports (host_id, port, protocol, state, service, product, version)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7)
+			 ON CONFLICT (host_id, port, protocol) DO NOTHING`,
+			hostID, p.Port, proto(p.Protocol), p.State, p.Service, p.Product, p.Version); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// MergeDetection stores phase-4 results: the OS guess and the service
+// fingerprint (published platform: product/version) of each open port.
+func (s *Store) MergeDetection(ctx context.Context, ip, osGuess string, ports []models.ReportedPort) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var hostID int64
+	err = tx.QueryRow(ctx,
+		`UPDATE hosts SET os_guess = CASE WHEN $2 <> '' THEN $2 ELSE os_guess END, last_seen=now()
+		 WHERE ip=$1 RETURNING id`, ip, osGuess).Scan(&hostID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	for _, p := range ports {
+		if _, err = tx.Exec(ctx,
+			`INSERT INTO ports (host_id, port, protocol, state, service, product, version)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7)
+			 ON CONFLICT (host_id, port, protocol) DO UPDATE SET
+			    service = CASE WHEN EXCLUDED.service <> '' THEN EXCLUDED.service ELSE ports.service END,
+			    product = CASE WHEN EXCLUDED.product <> '' THEN EXCLUDED.product ELSE ports.product END,
+			    version = CASE WHEN EXCLUDED.version <> '' THEN EXCLUDED.version ELSE ports.version END`,
+			hostID, p.Port, proto(p.Protocol), p.State, p.Service, p.Product, p.Version); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// HostByIP returns a host with its ports, used to reclassify after a phase.
+func (s *Store) HostByIP(ctx context.Context, ip string) (models.Host, error) {
+	var id int64
+	err := s.pool.QueryRow(ctx, `SELECT id FROM hosts WHERE ip=$1`, ip).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return models.Host{}, ErrNotFound
+	}
+	if err != nil {
+		return models.Host{}, err
+	}
+	return s.HostByID(ctx, id)
+}
+
+func (s *Store) SetAssetType(ctx context.Context, ip, assetType string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE hosts SET asset_type=$2 WHERE ip=$1`, ip, assetType)
+	return err
 }
 
 func (s *Store) InsertDNS(ctx context.Context, r models.DNSRecord) error {

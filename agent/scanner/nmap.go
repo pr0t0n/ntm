@@ -3,6 +3,7 @@
 package scanner
 
 import (
+	"bytes"
 	"context"
 	"encoding/xml"
 	"fmt"
@@ -31,48 +32,85 @@ type Port struct {
 	Version  string
 }
 
-// nmap XML schema (subset we consume).
-type nmapRun struct {
-	Hosts []struct {
-		Status struct {
-			State string `xml:"state,attr"`
-		} `xml:"status"`
-		Addresses []struct {
-			Addr   string `xml:"addr,attr"`
-			Type   string `xml:"addrtype,attr"`
-			Vendor string `xml:"vendor,attr"`
-		} `xml:"address"`
-		Hostnames struct {
-			Hostname []struct {
-				Name string `xml:"name,attr"`
-			} `xml:"hostname"`
-		} `xml:"hostnames"`
-		Ports struct {
-			Port []struct {
-				Protocol string `xml:"protocol,attr"`
-				PortID   int    `xml:"portid,attr"`
-				State    struct {
-					State string `xml:"state,attr"`
-				} `xml:"state"`
-				Service struct {
-					Name    string `xml:"name,attr"`
-					Product string `xml:"product,attr"`
-					Version string `xml:"version,attr"`
-				} `xml:"service"`
-			} `xml:"port"`
-		} `xml:"ports"`
-		OS struct {
-			OSMatch []struct {
-				Name     string `xml:"name,attr"`
-				Accuracy int    `xml:"accuracy,attr"`
-			} `xml:"osmatch"`
-		} `xml:"os"`
-	} `xml:"host"`
+// nmapHost is one <host> element of nmap's XML output (subset we consume).
+type nmapHost struct {
+	Timedout bool `xml:"timedout,attr"`
+	Status   struct {
+		State string `xml:"state,attr"`
+	} `xml:"status"`
+	Addresses []struct {
+		Addr   string `xml:"addr,attr"`
+		Type   string `xml:"addrtype,attr"`
+		Vendor string `xml:"vendor,attr"`
+	} `xml:"address"`
+	Hostnames struct {
+		Hostname []struct {
+			Name string `xml:"name,attr"`
+		} `xml:"hostname"`
+	} `xml:"hostnames"`
+	Ports struct {
+		Port []struct {
+			Protocol string `xml:"protocol,attr"`
+			PortID   int    `xml:"portid,attr"`
+			State    struct {
+				State string `xml:"state,attr"`
+			} `xml:"state"`
+			Service struct {
+				Name    string `xml:"name,attr"`
+				Product string `xml:"product,attr"`
+				Version string `xml:"version,attr"`
+			} `xml:"service"`
+		} `xml:"port"`
+	} `xml:"ports"`
+	OS struct {
+		OSMatch []struct {
+			Name     string `xml:"name,attr"`
+			Accuracy int    `xml:"accuracy,attr"`
+		} `xml:"osmatch"`
+	} `xml:"os"`
 }
 
-// RunNmap scans the given targets with nmap and returns normalized hosts. The
-// flags default to a top-100-port TCP service scan and can be overridden for
-// the deployment environment (e.g. unprivileged connect scans).
+type nmapRun struct {
+	Hosts []nmapHost `xml:"host"`
+}
+
+// toHost normalizes an nmap host, keeping only open ports.
+func (h nmapHost) toHost() Host {
+	host := Host{Status: h.Status.State}
+	for _, a := range h.Addresses {
+		switch a.Type {
+		case "ipv4", "ipv6":
+			host.IP = a.Addr
+		case "mac":
+			host.MAC = a.Addr
+			host.Vendor = a.Vendor
+		}
+	}
+	if len(h.Hostnames.Hostname) > 0 {
+		host.Hostname = h.Hostnames.Hostname[0].Name
+	}
+	if len(h.OS.OSMatch) > 0 {
+		host.OSGuess = h.OS.OSMatch[0].Name
+	}
+	for _, p := range h.Ports.Port {
+		if p.State.State != "open" {
+			continue
+		}
+		host.Ports = append(host.Ports, Port{
+			Port:     p.PortID,
+			Protocol: p.Protocol,
+			State:    p.State.State,
+			Service:  p.Service.Name,
+			Product:  p.Service.Product,
+			Version:  p.Service.Version,
+		})
+	}
+	return host
+}
+
+// RunNmap scans the given targets with nmap and returns normalized hosts. Hosts
+// that hit --host-timeout are dropped: their results are incomplete and must not
+// overwrite what the inventory already knows about them.
 func RunNmap(ctx context.Context, binary string, flags []string, targets []string) ([]Host, error) {
 	if binary == "" {
 		binary = "nmap"
@@ -82,10 +120,12 @@ func RunNmap(ctx context.Context, binary string, flags []string, targets []strin
 	args = append(args, targets...)
 
 	cmd := exec.CommandContext(ctx, binary, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
 		if len(out) == 0 {
-			return nil, fmt.Errorf("nmap: %w", err)
+			return nil, fmt.Errorf("nmap: %w: %s", err, strings.TrimSpace(stderr.String()))
 		}
 		// nmap can exit non-zero yet still emit usable XML; try to parse.
 	}
@@ -97,35 +137,10 @@ func RunNmap(ctx context.Context, binary string, flags []string, targets []strin
 
 	hosts := make([]Host, 0, len(run.Hosts))
 	for _, h := range run.Hosts {
-		host := Host{Status: h.Status.State}
-		for _, a := range h.Addresses {
-			switch a.Type {
-			case "ipv4", "ipv6":
-				host.IP = a.Addr
-			case "mac":
-				host.MAC = a.Addr
-				host.Vendor = a.Vendor
-			}
+		if h.Timedout {
+			continue
 		}
-		if len(h.Hostnames.Hostname) > 0 {
-			host.Hostname = h.Hostnames.Hostname[0].Name
-		}
-		if len(h.OS.OSMatch) > 0 {
-			host.OSGuess = h.OS.OSMatch[0].Name
-		}
-		for _, p := range h.Ports.Port {
-			if p.State.State != "open" {
-				continue
-			}
-			host.Ports = append(host.Ports, Port{
-				Port:     p.PortID,
-				Protocol: p.Protocol,
-				State:    p.State.State,
-				Service:  p.Service.Name,
-				Product:  p.Service.Product,
-				Version:  p.Service.Version,
-			})
-		}
+		host := h.toHost()
 		if host.IP == "" {
 			continue
 		}
@@ -134,64 +149,22 @@ func RunNmap(ctx context.Context, binary string, flags []string, targets []strin
 	return hosts, nil
 }
 
-// DefaultFlags builds the nmap argument list from a flag string, falling back to
-// a safe default service scan of the top 100 TCP ports.
-func DefaultFlags(override string) []string {
+// PortFlags returns the nmap flags for phase 3 (open ports), defaulting to a
+// connect scan of the top 100 TCP ports.
+func PortFlags(override string) []string {
 	if strings.TrimSpace(override) != "" {
 		return strings.Fields(override)
 	}
-	return []string{"-sT", "-sV", "--top-ports", "100", "--open", "-T4", "-n"}
+	return []string{"-sT", "--top-ports", "100", "--open", "-T4", "-n"}
 }
 
-// Discover runs a fast host-discovery (ping) sweep over the targets and returns
-// the IPs that are up. Scanning only live hosts afterward is what makes large
-// ranges (e.g. 10.0.0.0/8, 172.16.0.0/12) tractable.
-func Discover(ctx context.Context, binary string, flags []string, targets []string) ([]string, error) {
-	if binary == "" {
-		binary = "nmap"
-	}
-	args := append([]string{}, flags...)
-	args = append(args, "-oX", "-")
-	args = append(args, targets...)
-
-	cmd := exec.CommandContext(ctx, binary, args...)
-	out, err := cmd.Output()
-	if err != nil && len(out) == 0 {
-		return nil, fmt.Errorf("nmap discovery: %w", err)
-	}
-	var run nmapRun
-	if err := xml.Unmarshal(out, &run); err != nil {
-		return nil, fmt.Errorf("parse discovery xml: %w", err)
-	}
-	var live []string
-	for _, h := range run.Hosts {
-		if h.Status.State != "up" {
-			continue
-		}
-		for _, a := range h.Addresses {
-			if a.Type == "ipv4" || a.Type == "ipv6" {
-				live = append(live, a.Addr)
-			}
-		}
-	}
-	return live, nil
-}
-
-// DiscoveryFlags returns the nmap flags for the host-discovery phase. The
-// default combines ICMP echo/timestamp with TCP SYN/ACK probes to common service
-// ports, so hosts that block ping but expose services are still found (a plain
-// -sn ping sweep misses those — the same hosts a -sS scan would reveal).
-func DiscoveryFlags(override string) []string {
+// DetectFlags returns the nmap flags for phase 4: OS detection plus service
+// version detection (the platforms published on the open ports).
+func DetectFlags(override string) []string {
 	if strings.TrimSpace(override) != "" {
 		return strings.Fields(override)
 	}
-	return []string{
-		"-sn", "-n", "-T4",
-		"-PE", "-PP", // ICMP echo + timestamp
-		"-PS21,22,23,25,53,80,110,135,139,143,443,445,993,995,1433,3306,3389,8080", // TCP SYN
-		"-PA80,443,3389", // TCP ACK
-		"--min-rate", "1000",
-	}
+	return []string{"-sV", "-O", "--osscan-guess", "-T4", "-n"}
 }
 
 // TopPortsNote documents the ports covered by --top-ports 100 (informational).

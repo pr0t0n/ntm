@@ -26,6 +26,9 @@
         <button class="nav-item" data-view="cmdb">
           <span class="ico">▤</span><span>CMDB</span>
         </button>
+        <button class="nav-item" data-view="scan">
+          <span class="ico">◎</span><span>Varredura</span>
+        </button>
       </nav>
       <div class="sidebar-foot">
         <div id="agentStatus" class="agent-status">— agentes</div>
@@ -40,18 +43,6 @@
           <h1>Dashboard</h1>
           <p class="muted">Inventário de ativos descobertos na rede</p>
         </header>
-
-        <div class="card runner">
-          <div class="runner-left">
-            <span class="runner-label">Executar análise</span>
-            <select id="agentSelect"><option value="">Carregando agentes…</option></select>
-          </div>
-          <div class="runner-right">
-            <span id="runnerMsg" class="muted"></span>
-            <button id="runBtn" class="run-btn">▶ RODAR</button>
-            <button id="stopBtn" class="stop-btn hidden">⏹ PARAR</button>
-          </div>
-        </div>
 
         <div class="cards">
           <div class="card kpi"><div class="kpi-label">Total de Hosts</div><div class="kpi-value" id="kpiTotal">—</div><div class="kpi-foot"><span class="up" id="kpiUp">0 up</span> · <span class="down" id="kpiDown">0 down</span></div></div>
@@ -118,12 +109,75 @@
           <input id="searchInput" type="text" placeholder="Pesquisar ativos… (ex: 192.168.1.10, dns, 443)" />
           <button id="searchBtn">Buscar</button>
           <span id="searchCount" class="muted"></span>
+          <button id="resetBtn" class="reset-btn" title="Apaga todos os ativos, portas e registros DNS">⟲ RESET</button>
         </div>
         <div class="card nopad">
           <table class="tbl cmdb">
             <thead><tr><th>IP</th><th>Hostname</th><th>Tipo</th><th>SO</th><th>MAC / Vendor</th><th>Portas / Apps</th><th>Status</th></tr></thead>
             <tbody id="cmdbBody"></tbody>
           </table>
+        </div>
+      </section>
+
+      <!-- VARREDURA (Scan) -->
+      <section id="view-scan" class="view">
+        <header class="view-head">
+          <h1>Varredura</h1>
+          <p class="muted">Selecione o agente, informe o range e execute a descoberta</p>
+        </header>
+
+        <div class="card scan-panel">
+          <div class="scan-row">
+            <label class="scan-field">
+              <span class="field-label">Agente</span>
+              <select id="agentSelect"><option value="">Carregando agentes…</option></select>
+            </label>
+            <div class="scan-field">
+              <span class="field-label">IP do agente</span>
+              <span id="agentIp" class="field-static">—</span>
+            </div>
+          </div>
+          <div class="scan-row">
+            <label class="scan-field grow">
+              <span class="field-label">Range a varrer (CIDR, separado por vírgula)</span>
+              <input id="rangeInput" type="text" placeholder="ex: 192.168.0.0/24" />
+            </label>
+            <div class="scan-field">
+              <span class="field-label">Sugestão</span>
+              <button id="useSuggested" type="button" class="chip-btn" title="Usar a sugestão baseada no IP do agente">↳ <span id="suggestedRange">—</span></button>
+            </div>
+          </div>
+          <div class="scan-actions">
+            <button id="runBtn" class="run-btn">▶ RODAR</button>
+            <button id="stopBtn" class="stop-btn hidden">⏹ PARAR</button>
+            <span id="runnerMsg" class="muted"></span>
+          </div>
+          <div id="scanProgress" class="scan-progress hidden">
+            <ol class="phases">
+              <li data-phase="ping"><span class="num">1</span>Ping</li>
+              <li data-phase="hostname"><span class="num">2</span>Hostname</li>
+              <li data-phase="ports"><span class="num">3</span>Portas</li>
+              <li data-phase="detect"><span class="num">4</span>SO e plataformas</li>
+            </ol>
+            <div class="scan-stats">
+              <div><span class="stat-label">Tempo total</span><span id="spTotal" class="stat-value">—</span></div>
+              <div><span class="stat-label">Tempo da fase</span><span id="spPhase" class="stat-value">—</span></div>
+              <div><span class="stat-label">Hosts encontrados</span><span id="spHosts" class="stat-value">0</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card scan-manage">
+          <div>
+            <h3>Instalação do agente</h3>
+            <p class="muted">Baixe o agente e instale num host Linux autorizado da rede a inventariar.</p>
+            <a id="downloadAgent" class="ghost-btn" href="/ntm_agent.py" download="ntm_agent.py">⬇ Baixar agente</a>
+          </div>
+          <div>
+            <h3>Remover agente</h3>
+            <p class="muted">Remove o agente selecionado da plataforma. Os ativos já descobertos são mantidos.</p>
+            <button id="removeAgent" class="danger-btn" type="button">✕ Remover agente atual</button>
+          </div>
         </div>
       </section>
     </main>

@@ -15,6 +15,14 @@ type Agent struct {
 	ScanRequested bool      `json:"scan_requested"`
 	ScanState     string    `json:"scan_state"` // idle | running
 	ScanStartedAt time.Time `json:"scan_started_at"`
+	// Phased discovery progress: ping | hostname | ports | detect ('' when idle),
+	// when the current phase began, and how many live hosts the scan found.
+	ScanPhase      string    `json:"scan_phase"`
+	PhaseStartedAt time.Time `json:"phase_started_at"`
+	ScanHosts      int       `json:"scan_hosts"`
+	IP             string    `json:"ip"`              // agent's own primary IP
+	SuggestedRange string    `json:"suggested_range"` // /24 derived from IP (UI hint)
+	ScanRange      string    `json:"scan_range"`      // range chosen for the next/last run
 	Online        bool      `json:"online"`
 	CreatedAt     time.Time `json:"created_at"`
 }
@@ -64,6 +72,7 @@ type EnrollRequest struct {
 	InstallToken string   `json:"install_token"`
 	Name         string   `json:"name"`
 	Ranges       []string `json:"ranges"`
+	IP           string   `json:"ip"`
 }
 
 type EnrollResponse struct {
@@ -73,6 +82,14 @@ type EnrollResponse struct {
 
 // ScanReport is the batch of findings an agent uploads after a scan run.
 type ScanReport struct {
+	Hosts []ReportedHost `json:"hosts"`
+	DNS   []DNSRecord    `json:"dns"`
+}
+
+// PhaseReport is the batch of results an agent uploads during one discovery
+// phase: ping (live hosts) | hostname | ports | detect (OS + published services).
+type PhaseReport struct {
+	Phase string         `json:"phase"`
 	Hosts []ReportedHost `json:"hosts"`
 	DNS   []DNSRecord    `json:"dns"`
 }
@@ -113,4 +130,11 @@ type DashboardStats struct {
 type AppCount struct {
 	Name  string `json:"name"`
 	Count int    `json:"count"`
+}
+
+// ResetResult reports how many inventory records a reset removed.
+type ResetResult struct {
+	Hosts int `json:"hosts"`
+	Ports int `json:"ports"`
+	DNS   int `json:"dns"`
 }

@@ -44,9 +44,10 @@ func ReadARPTable() []ARPEntry {
 	return entries
 }
 
-// MergeARP fills in MAC addresses on scanned hosts from the ARP cache when nmap
-// did not resolve them (e.g. unprivileged scans).
-func MergeARP(hosts []Host, arp []ARPEntry) []Host {
+// FillMAC fills in MAC addresses on live hosts from the ARP cache when nmap did
+// not resolve them (e.g. unprivileged scans). It never adds hosts: only hosts
+// that answered the ping are part of the inventory.
+func FillMAC(hosts []Host, arp []ARPEntry) []Host {
 	byIP := make(map[string]string, len(arp))
 	for _, e := range arp {
 		byIP[e.IP] = e.MAC
@@ -56,17 +57,6 @@ func MergeARP(hosts []Host, arp []ARPEntry) []Host {
 			if mac, ok := byIP[hosts[i].IP]; ok {
 				hosts[i].MAC = mac
 			}
-		}
-	}
-	// Surface ARP-only neighbours that nmap did not list as up.
-	known := make(map[string]bool, len(hosts))
-	for _, h := range hosts {
-		known[h.IP] = true
-	}
-	for _, e := range arp {
-		if !known[e.IP] {
-			hosts = append(hosts, Host{IP: e.IP, MAC: e.MAC, Status: "up"})
-			known[e.IP] = true
 		}
 	}
 	return hosts

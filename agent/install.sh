@@ -11,7 +11,7 @@ set -euo pipefail
 need_root() { [ "$(id -u)" -eq 0 ] || { echo "Run as root (sudo)." >&2; exit 1; }; }
 need_root
 
-BIN_SRC="${BIN_SRC:-./ntm-agent}"
+AGENT_SRC="${AGENT_SRC:-./ntm_agent.py}"
 INSTALL_DIR="/opt/ntm"
 STATE_DIR="/var/lib/ntm"
 
@@ -28,17 +28,17 @@ if [ -z "$INSTALL_TOKEN" ]; then
 fi
 [ -n "$PLATFORM_URL" ] && [ -n "$INSTALL_TOKEN" ] || { echo "Platform URL and token are required." >&2; exit 1; }
 
-command -v nmap >/dev/null 2>&1 || {
-  echo "nmap not found. Install it first (e.g. apt-get install -y nmap / yum install -y nmap)." >&2
+command -v python3 >/dev/null 2>&1 || {
+  echo "python3 not found. Install it first (e.g. apt-get install -y python3 / yum install -y python3)." >&2
   exit 1
 }
 
-# --- install binary ---
+# --- install agent ---
 install -d "$INSTALL_DIR" "$STATE_DIR"
-if [ -f "$BIN_SRC" ]; then
-  install -m 0755 "$BIN_SRC" "$INSTALL_DIR/ntm-agent"
+if [ -f "$AGENT_SRC" ]; then
+  install -m 0755 "$AGENT_SRC" "$INSTALL_DIR/ntm_agent.py"
 else
-  echo "Agent binary not found at $BIN_SRC. Build it with: go build -o ntm-agent ." >&2
+  echo "Agent script not found at $AGENT_SRC." >&2
   exit 1
 fi
 
@@ -64,10 +64,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=$INSTALL_DIR/agent.env
-ExecStart=$INSTALL_DIR/ntm-agent
+ExecStart=$(command -v python3) $INSTALL_DIR/ntm_agent.py
 Restart=on-failure
 RestartSec=10
-# nmap raw-socket scans need these capabilities; drop everything else.
+# the ICMP ping sweep needs a raw socket; drop everything else.
 AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
 NoNewPrivileges=true
 ProtectSystem=strict

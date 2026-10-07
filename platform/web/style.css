@@ -103,6 +103,25 @@ body {
 .stop-btn.hidden { display: none; }
 #runnerMsg.ok { color: var(--up); } #runnerMsg.err { color: var(--down); }
 
+/* Phased scan progress (inside the runner card) */
+.scan-progress { flex-basis: 100%; display: flex; align-items: center; justify-content: space-between;
+  gap: 18px; flex-wrap: wrap; border-top: 1px solid var(--border); padding-top: 14px; }
+.scan-progress.hidden { display: none; }
+.phases { list-style: none; display: flex; gap: 8px; margin: 0; padding: 0; flex-wrap: wrap; }
+.phases li { display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 6px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--muted); font-size: 12px; font-weight: 600; }
+.phases .num { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%;
+  background: var(--bg-elev2); font-size: 11px; }
+.phases li.done { color: var(--up); border-color: var(--up); }
+.phases li.done .num { background: var(--up); color: #06230f; }
+.phases li.active { color: var(--text); border-color: var(--accent); background: rgba(79, 156, 249, .12); }
+.phases li.active .num { background: var(--accent); color: #fff; animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .45; } }
+.scan-stats { display: flex; gap: 22px; }
+.scan-stats > div { display: flex; flex-direction: column; gap: 2px; }
+.stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.stat-value { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
 .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 20px; }
 .kpi { padding: 18px; }
 .kpi-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
@@ -150,6 +169,12 @@ body {
 .search-bar input { flex: 1; min-width: 260px; }
 .search-bar button { background: var(--accent); border-color: var(--accent); color: #fff; cursor: pointer; font-weight: 600; }
 .search-bar button:hover { filter: brightness(1.08); }
+.search-bar .reset-btn {
+  margin-left: auto; background: transparent; border-color: var(--down); color: var(--down);
+  font-weight: 700; letter-spacing: .5px;
+}
+.search-bar .reset-btn:hover { background: var(--down); color: #2b0606; filter: none; }
+.search-bar .reset-btn:disabled { opacity: .55; cursor: default; }
 
 /* Network map */
 .map-legend { display: flex; gap: 20px; margin-bottom: 14px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
@@ -181,3 +206,35 @@ body {
   .sidebar { position: fixed; z-index: 40; transform: translateX(-100%); transition: .2s; }
   .content { padding: 18px; }
 }
+
+/* Scan (Varredura) view */
+.scan-panel { display: flex; flex-direction: column; gap: 16px; }
+.scan-row { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-end; }
+.scan-field { display: flex; flex-direction: column; gap: 6px; }
+.scan-field.grow { flex: 1 1 320px; }
+.field-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.field-static { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+#rangeInput {
+  background: var(--bg-elev2); border: 1px solid var(--border); color: var(--text);
+  padding: 10px 12px; border-radius: 8px; font-size: 14px; width: 100%; font-family: inherit;
+}
+#rangeInput:focus { outline: none; border-color: var(--accent); }
+.chip-btn {
+  background: var(--bg-elev2); border: 1px dashed var(--border); color: var(--accent);
+  padding: 9px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;
+}
+.chip-btn:hover { border-color: var(--accent); }
+.scan-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.scan-manage { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+.scan-manage h3 { margin: 0 0 6px; }
+.scan-manage p { margin: 0 0 12px; }
+.ghost-btn, .danger-btn {
+  display: inline-block; padding: 10px 18px; border-radius: 8px; font-weight: 700;
+  font-size: 13px; cursor: pointer; text-decoration: none; letter-spacing: .5px;
+}
+.ghost-btn { background: var(--bg-elev2); border: 1px solid var(--accent); color: var(--accent); }
+.ghost-btn:hover { background: var(--accent); color: #fff; }
+.danger-btn { background: transparent; border: 1px solid var(--down); color: var(--down); }
+.danger-btn:hover { background: var(--down); color: #2b0606; }
+.danger-btn:disabled { opacity: .5; cursor: default; }
+@media (max-width: 720px) { .scan-manage { grid-template-columns: 1fr; } }

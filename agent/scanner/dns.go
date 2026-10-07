@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -14,10 +15,11 @@ type DNSRecord struct {
 	Value  string
 }
 
-// EnumerateDNS performs reverse (PTR) lookups for discovered hosts and resolves
-// each discovered name back to A records. This enriches inventory records with
-// hostnames for assets on the operator's own network.
-func EnumerateDNS(ctx context.Context, resolver string, hosts []Host) []DNSRecord {
+// ResolveHostnames is phase 2: it reverse-resolves (PTR) each live IP to its
+// hostname and forward-resolves that name back to A records. Lookups run in
+// parallel so large batches of live hosts do not serialize on DNS timeouts.
+// Returns only the hosts that resolved, plus the DNS records found.
+func ResolveHostnames(ctx context.Context, resolver string, ips []string) ([]Host, []DNSRecord) {
 	r := &net.Resolver{}
 	if resolver != "" {
 		r = &net.Resolver{
@@ -29,41 +31,60 @@ func EnumerateDNS(ctx context.Context, resolver string, hosts []Host) []DNSRecor
 		}
 	}
 
-	var records []DNSRecord
-	seen := map[string]bool{}
-
-	for _, h := range hosts {
-		lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		names, err := r.LookupAddr(lookupCtx, h.IP)
-		cancel()
-		if err == nil {
+	type result struct {
+		host    Host
+		records []DNSRecord
+	}
+	results := make([]result, len(ips))
+	sem := make(chan struct{}, 16)
+	var wg sync.WaitGroup
+	for i, ip := range ips {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, ip string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			names, err := r.LookupAddr(lookupCtx, ip)
+			cancel()
+			if err != nil || len(names) == 0 {
+				return
+			}
+			res := result{host: Host{IP: ip, Hostname: trimDot(names[0])}}
 			for _, name := range names {
 				name = trimDot(name)
-				key := "PTR|" + h.IP + "|" + name
-				if seen[key] {
-					continue
-				}
-				seen[key] = true
-				records = append(records, DNSRecord{HostIP: h.IP, Name: name, Type: "PTR", Value: h.IP})
-
-				// Forward-resolve the name to capture A records.
+				res.records = append(res.records, DNSRecord{HostIP: ip, Name: name, Type: "PTR", Value: ip})
 				fctx, fcancel := context.WithTimeout(ctx, 3*time.Second)
 				addrs, ferr := r.LookupHost(fctx, name)
 				fcancel()
 				if ferr == nil {
 					for _, a := range addrs {
-						akey := "A|" + name + "|" + a
-						if seen[akey] {
-							continue
-						}
-						seen[akey] = true
-						records = append(records, DNSRecord{HostIP: h.IP, Name: name, Type: "A", Value: a})
+						res.records = append(res.records, DNSRecord{HostIP: ip, Name: name, Type: "A", Value: a})
 					}
 				}
 			}
+			results[i] = res
+		}(i, ip)
+	}
+	wg.Wait()
+
+	var hosts []Host
+	var records []DNSRecord
+	seen := map[string]bool{}
+	for _, res := range results {
+		if res.host.IP == "" {
+			continue
+		}
+		hosts = append(hosts, res.host)
+		for _, rec := range res.records {
+			key := rec.Type + "|" + rec.Name + "|" + rec.Value
+			if !seen[key] {
+				seen[key] = true
+				records = append(records, rec)
+			}
 		}
 	}
-	return records
+	return hosts, records
 }
 
 func trimDot(s string) string {

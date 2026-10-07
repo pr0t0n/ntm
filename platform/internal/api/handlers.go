@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -30,6 +32,7 @@ func (s *Server) Routes(web http.Handler) http.Handler {
 	// Agent-facing endpoints (HTTPS/TLS).
 	mux.HandleFunc("POST /api/v1/enroll", s.handleEnroll)
 	mux.HandleFunc("POST /api/v1/scan-results", s.authAgent(s.handleScanResults))
+	mux.HandleFunc("POST /api/v1/scan-phase", s.authAgent(s.handleScanPhase))
 	mux.HandleFunc("GET /api/v1/agent/commands", s.authAgent(s.handleCommands))
 	mux.HandleFunc("POST /api/v1/agent/status", s.authAgent(s.handleAgentStatus))
 
@@ -37,12 +40,14 @@ func (s *Server) Routes(web http.Handler) http.Handler {
 	mux.HandleFunc("GET /api/v1/agents", s.handleAgents)
 	mux.HandleFunc("POST /api/v1/agents/{id}/run", s.handleRunAgent)
 	mux.HandleFunc("POST /api/v1/agents/{id}/stop", s.handleStopAgent)
+	mux.HandleFunc("DELETE /api/v1/agents/{id}", s.handleDeleteAgent)
 
 	// Frontend endpoints.
 	mux.HandleFunc("GET /api/v1/dashboard", s.handleDashboard)
 	mux.HandleFunc("GET /api/v1/hosts", s.handleHosts)
 	mux.HandleFunc("GET /api/v1/hosts/{id}", s.handleHost)
 	mux.HandleFunc("GET /api/v1/network-map", s.handleMap)
+	mux.HandleFunc("POST /api/v1/reset", s.handleReset)
 	mux.HandleFunc("GET /api/v1/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -72,6 +77,7 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, "could not enroll")
 		return
 	}
+	s.store.SetAgentIP(r.Context(), agent.ID, pickIP(req.IP, r))
 	writeJSON(w, http.StatusOK, models.EnrollResponse{
 		AgentID:    agent.ID,
 		AgentToken: agent.AgentToken,
@@ -127,15 +133,82 @@ func (s *Server) handleScanResults(w http.ResponseWriter, r *http.Request, agent
 	})
 }
 
+// handleScanPhase ingests one batch of a discovery phase. Each phase stores only
+// what it discovered, so the inventory fills in progressively:
+//   ping     — live hosts (counted toward the scan's host total)
+//   hostname — hostname + DNS records
+//   ports    — open-port set
+//   detect   — OS guess + published services (product/version)
+func (s *Server) handleScanPhase(w http.ResponseWriter, r *http.Request, agent models.Agent) {
+	var rep models.PhaseReport
+	if err := json.NewDecoder(r.Body).Decode(&rep); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	switch rep.Phase {
+	case "ping", "hostname", "ports", "detect":
+	default:
+		httpError(w, http.StatusBadRequest, "unknown phase")
+		return
+	}
+	ctx := r.Context()
+	stored := 0
+	for _, h := range rep.Hosts {
+		var err error
+		switch rep.Phase {
+		case "ping":
+			err = s.store.UpsertPingHost(ctx, h, agent.ID)
+		case "hostname":
+			err = s.store.SetHostname(ctx, h.IP, h.Hostname)
+		case "ports":
+			if err = s.store.ReplacePorts(ctx, h.IP, h.Ports); err == nil {
+				err = s.reclassify(ctx, h.IP)
+			}
+		case "detect":
+			if err = s.store.MergeDetection(ctx, h.IP, normalizeOS(h.OSGuess), h.Ports); err == nil {
+				err = s.reclassify(ctx, h.IP)
+			}
+		}
+		if err != nil {
+			log.Printf("phase %s host %s: %v", rep.Phase, h.IP, err)
+			continue
+		}
+		stored++
+	}
+	for _, d := range rep.DNS {
+		if err := s.store.InsertDNS(ctx, d); err != nil {
+			log.Printf("insert dns %s: %v", d.Name, err)
+		}
+	}
+	if rep.Phase == "ping" {
+		s.store.AddScanHosts(ctx, agent.ID, stored)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"phase": rep.Phase, "hosts": stored, "dns": len(rep.DNS)})
+}
+
+// reclassify recomputes a host's asset type from everything stored so far.
+func (s *Server) reclassify(ctx context.Context, ip string) error {
+	h, err := s.store.HostByIP(ctx, ip)
+	if err != nil {
+		return err
+	}
+	rh := models.ReportedHost{IP: h.IP, Hostname: h.Hostname, MAC: h.MAC, Vendor: h.Vendor, OSGuess: h.OSGuess}
+	for _, p := range h.Ports {
+		rh.Ports = append(rh.Ports, models.ReportedPort{Port: p.Port, Protocol: p.Protocol,
+			State: p.State, Service: p.Service, Product: p.Product, Version: p.Version})
+	}
+	return s.store.SetAssetType(ctx, ip, classifyAsset(rh))
+}
+
 // handleCommands lets a polling agent learn whether an on-demand scan was
 // requested for it from the UI; the request is consumed (cleared) atomically.
 func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request, agent models.Agent) {
-	scanNow, stopNow, err := s.store.ConsumeCommands(r.Context(), agent.ID)
+	scanNow, stopNow, scanRange, err := s.store.ConsumeCommands(r.Context(), agent.ID)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "command error")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"scan_now": scanNow, "stop_now": stopNow})
+	writeJSON(w, http.StatusOK, map[string]any{"scan_now": scanNow, "stop_now": stopNow, "scan_range": scanRange})
 }
 
 // handleAgentStatus lets the agent report when a scan starts so the UI reflects
@@ -143,12 +216,17 @@ func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request, agent mo
 func (s *Server) handleAgentStatus(w http.ResponseWriter, r *http.Request, agent models.Agent) {
 	var body struct {
 		State string `json:"state"` // running | idle
+		Phase string `json:"phase"` // ping | hostname | ports | detect (while running)
+		IP    string `json:"ip"`    // agent's self-reported primary IP
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	if body.State == "running" {
+	s.store.SetAgentIP(r.Context(), agent.ID, pickIP(body.IP, r))
+	if body.State == "running" && body.Phase != "" {
+		s.store.SetPhase(r.Context(), agent.ID, body.Phase)
+	} else if body.State == "running" {
 		s.store.SetRunning(r.Context(), agent.ID)
 	} else {
 		s.store.MarkScanDone(r.Context(), agent.ID)
@@ -167,6 +245,9 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	if agents == nil {
 		agents = []models.Agent{}
 	}
+	for i := range agents {
+		agents[i].SuggestedRange = suggestRange(agents[i].IP)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"agents": agents})
 }
 
@@ -176,7 +257,11 @@ func (s *Server) handleRunAgent(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "bad id")
 		return
 	}
-	if err := s.store.RequestScan(r.Context(), id); errors.Is(err, db.ErrNotFound) {
+	var body struct {
+		Range string `json:"range"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if err := s.store.RequestScan(r.Context(), id, strings.TrimSpace(body.Range)); errors.Is(err, db.ErrNotFound) {
 		httpError(w, http.StatusNotFound, "agent not found")
 		return
 	} else if err != nil {
@@ -200,6 +285,45 @@ func (s *Server) handleStopAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"stopping": true, "agent_id": id})
+}
+
+func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	if err := s.store.DeleteAgent(r.Context(), id); errors.Is(err, db.ErrNotFound) {
+		httpError(w, http.StatusNotFound, "agent not found")
+		return
+	} else if err != nil {
+		httpError(w, http.StatusInternalServerError, "could not delete")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "agent_id": id})
+}
+
+// pickIP prefers the agent's self-reported IP and falls back to the request's
+// source address (which may be a NAT gateway, hence the preference).
+func pickIP(reported string, r *http.Request) string {
+	if ip := net.ParseIP(strings.TrimSpace(reported)); ip != nil {
+		return ip.String()
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return ""
+	}
+	return host
+}
+
+// suggestRange turns an agent IP into a /24 CIDR suggestion for the UI.
+func suggestRange(ip string) string {
+	p := net.ParseIP(ip)
+	if p == nil || p.To4() == nil {
+		return ""
+	}
+	v4 := p.To4()
+	return fmt.Sprintf("%d.%d.%d.0/24", v4[0], v4[1], v4[2])
 }
 
 // --- Frontend endpoints ---
@@ -257,6 +381,19 @@ func (s *Server) handleMap(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, data)
 }
 
+// handleReset wipes the whole inventory (hosts, ports, DNS) and resets agent
+// scan state; enrolled agents are kept.
+func (s *Server) handleReset(w http.ResponseWriter, r *http.Request) {
+	res, err := s.store.ResetInventory(r.Context())
+	if err != nil {
+		log.Printf("reset inventory: %v", err)
+		httpError(w, http.StatusInternalServerError, "reset error")
+		return
+	}
+	log.Printf("inventory reset by %s: %d hosts, %d ports, %d dns removed", r.RemoteAddr, res.Hosts, res.Ports, res.DNS)
+	writeJSON(w, http.StatusOK, res)
+}
+
 // --- helpers ---
 
 func bearer(r *http.Request) string {
@@ -284,4 +421,3 @@ func logging(next http.Handler) http.Handler {
 	})
 }
 
-var _ = context.Background
