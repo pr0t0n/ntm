@@ -25,7 +25,7 @@ const state = {
   screen: localStorage.getItem("atlas.screen") || "dash",
   search: "", fType: "Todos", fFam: "Todas", fSubnet: "Todas", fStatus: "Todos",
   fEol: false, stale: false, limit: 40, drawer: null,
-  mapSel: null, focus: null, colorBy: "tipo", hl: "none", links: true,
+  mapSel: null, focus: null, colorBy: "tipo", hl: "none", links: true, mapView: null,
   scanName: "Varredura ad-hoc", agentId: null, range: "",
 };
 
@@ -81,7 +81,7 @@ async function loadAssets() {
     const ports = h.ports || [];
     const app = ports.map(p => (p.product || p.service || "") + (p.version ? " " + p.version : "")).filter(Boolean)[0] || "";
     return {
-      id: String(h.id), ci: "CI" + h.id, host: h.hostname || h.ip, ip: h.ip, mac: h.mac || "",
+      id: String(h.id), ci: "CI" + h.id, host: h.hostname || h.ip, hostname: h.hostname || "", ip: h.ip, mac: h.mac || "",
       type, icon: ICON[type], os: os || "Desconhecido", fam: famFromOs(os), cat: catFromType(type),
       eol: isEol(os), subnet: prefix, subnetName: prefix + ".0/24", status, discDays, seenMin,
       crit: critFromType(type), owner: "—", user: "—", vendor: h.vendor || app || "—",
@@ -154,6 +154,43 @@ function render() {
     : viewMap();
   document.getElementById("drawer").innerHTML = state.drawer ? viewDrawer() : "";
   renderCollector();
+  if (state.screen === "map") wireMap();
+}
+
+// wireMap adds wheel-zoom (toward the cursor) and drag-to-pan on the map SVG by
+// mutating its viewBox live, and keeps the view in state so it survives
+// re-renders (e.g. selecting a node).
+function wireMap() {
+  const svg = document.getElementById("mapSvg");
+  if (!svg) return;
+  const vb = () => state.mapView || { x: 0, y: 0, w: 1240, h: MAP_H };
+  const toSvg = e => { const r = svg.getBoundingClientRect(); const v = vb(); return { x: v.x + (e.clientX - r.left) / r.width * v.w, y: v.y + (e.clientY - r.top) / r.height * v.h }; };
+  const apply = v => { state.mapView = v; svg.setAttribute("viewBox", `${v.x} ${v.y} ${v.w} ${v.h}`); };
+  svg.onwheel = e => {
+    e.preventDefault();
+    const v = vb(), p = toSvg(e);
+    let f = e.deltaY < 0 ? 0.85 : 1.18;
+    let nw = v.w * f, nh = v.h * f;
+    const maxW = 1240, minW = 180;
+    if (nw > maxW) { nw = maxW; nh = maxW * (MAP_H / 1240); }
+    if (nw < minW) { nw = minW; nh = minW * (MAP_H / 1240); }
+    apply({ x: p.x - (p.x - v.x) * (nw / v.w), y: p.y - (p.y - v.y) * (nh / v.h), w: nw, h: nh });
+  };
+  // Pan only when the pointer actually moves past a small threshold, so a plain
+  // click still reaches a node/subnet (drill-down keeps working).
+  let drag = null, panned = false;
+  svg.onpointerdown = e => { drag = { sx: e.clientX, sy: e.clientY, v: vb() }; panned = false; };
+  svg.onpointermove = e => {
+    if (!drag) return;
+    if (!panned && Math.abs(e.clientX - drag.sx) + Math.abs(e.clientY - drag.sy) < 5) return;
+    panned = true; svg.style.cursor = "grabbing";
+    const r = svg.getBoundingClientRect(), v = drag.v;
+    apply({ x: v.x - (e.clientX - drag.sx) / r.width * v.w, y: v.y - (e.clientY - drag.sy) / r.height * v.h, w: v.w, h: v.h });
+  };
+  const end = () => { drag = null; svg.style.cursor = "grab"; };
+  svg.onpointerup = end; svg.onpointerleave = end;
+  // Swallow the click that follows a real pan so it does not select a node.
+  svg.addEventListener("click", e => { if (panned) { e.stopPropagation(); e.preventDefault(); panned = false; } }, true);
 }
 
 function renderNav() {
@@ -365,11 +402,12 @@ function viewCmdb() {
       <span>${withPorts} com portas abertas</span><span>${totalPorts} portas abertas no total</span>
     </div>
     <div style="border-radius:var(--radius-md);background:var(--color-surface);box-shadow:var(--shadow-sm);padding:6px 10px;overflow-x:auto">
-      <table class="table" style="font-size:13px;min-width:860px">
-        <thead><tr><th>Ativo</th><th>Tipo</th><th>Sistema operacional</th><th>Sub-rede</th><th>Portas</th><th>Visto</th></tr></thead>
+      <table class="table" style="font-size:13px;min-width:960px">
+        <thead><tr><th>Ativo</th><th>Hostname</th><th>Tipo</th><th>Sistema operacional</th><th>Sub-rede</th><th>Portas</th><th>Visto</th></tr></thead>
         <tbody>
           ${rows.map(r => `<tr onclick="App.openDrawer('${r.id}')" style="cursor:pointer">
-            <td><div style="display:flex;flex-direction:column"><span style="font-weight:500">${esc(r.host)}</span><span style="font-size:11.5px;color:var(--color-neutral-500);font-family:ui-monospace,monospace">${esc(r.ip)}</span></div></td>
+            <td><span style="font-weight:500;font-family:ui-monospace,monospace">${esc(r.ip)}</span></td>
+            <td>${r.hostname ? esc(r.hostname) : `<span style="color:var(--color-neutral-600)">—</span>`}</td>
             <td><span style="display:flex;align-items:center;gap:7px;color:var(--color-neutral-300)"><i class="ph ${r.icon}" style="color:var(--color-accent-400)"></i>${esc(r.type)}</span></td>
             <td>${esc(r.os)}</td>
             <td style="color:var(--color-neutral-300)">${esc(r.subnetName)}</td>
@@ -490,10 +528,15 @@ function viewMap() {
       </div>
       <button class="btn btn-secondary" onclick="App.toggleLinks()" style="font-size:12.5px"><i class="ph ${s.links ? "ph-eye" : "ph-eye-slash"}"></i>Ligações</button>
       ${foc || selA ? `<button class="btn btn-secondary" onclick="App.clearFocus()" style="font-size:12.5px"><i class="ph ph-arrows-out"></i>Visão geral</button>` : ""}
+      <div style="margin-left:auto;display:flex;align-items:center;gap:6px">
+        <button class="btn btn-secondary btn-icon" title="Diminuir zoom" onclick="App.zoomBy(1.25)"><i class="ph ph-minus"></i></button>
+        <button class="btn btn-secondary btn-icon" title="Aumentar zoom" onclick="App.zoomBy(0.8)"><i class="ph ph-plus"></i></button>
+        <button class="btn btn-secondary" style="font-size:12.5px" title="Ajustar à tela" onclick="App.zoomFit()"><i class="ph ph-corners-out"></i>Ajustar</button>
+      </div>
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start">
       <div style="flex:999 1 620px;min-width:min(100%,560px);border-radius:var(--radius-md);background:radial-gradient(ellipse at 50% 20%,color-mix(in srgb,var(--color-accent) 7%,var(--color-surface)),var(--color-bg) 75%);box-shadow:var(--shadow-sm);overflow:hidden">
-        <svg viewBox="0 0 1240 ${MAP_H}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:auto;max-height:74vh;display:block">
+        <svg id="mapSvg" viewBox="${s.mapView ? `${s.mapView.x} ${s.mapView.y} ${s.mapView.w} ${s.mapView.h}` : `0 0 1240 ${MAP_H}`}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:auto;max-height:74vh;display:block;cursor:grab;touch-action:none">
           <rect x="0" y="0" width="1240" height="${MAP_H}" onclick="App.clearSel()" style="fill:transparent"></rect>
           ${spokes.map(e => `<line x1="${e.x1}" y1="${e.y1}" x2="${e.x2}" y2="${e.y2}" style="stroke:var(--color-neutral-700);stroke-width:.7;opacity:${e.op}"></line>`).join("")}
           ${edges.map(e => `<line x1="${e.x1}" y1="${e.y1}" x2="${e.x2}" y2="${e.y2}" style="stroke:var(--color-accent-500);stroke-width:1.4;opacity:.6"></line>`).join("")}
@@ -618,10 +661,12 @@ const App = {
   toggleEol() { state.fEol = !state.fEol; state.limit = 40; render(); },
   toggleLinks() { state.links = !state.links; render(); },
   clearFilters() { Object.assign(state, { search: "", fType: "Todos", fFam: "Todas", fSubnet: "Todas", fStatus: "Todos", fEol: false, stale: false }); render(); },
-  clearFocus() { state.focus = null; state.mapSel = null; render(); },
+  clearFocus() { state.focus = null; state.mapSel = null; state.mapView = null; render(); },
   clearSel() { state.mapSel = null; render(); },
   selNode(id) { state.mapSel = id; render(); },
-  focusSubnet(id) { state.focus = id; state.mapSel = null; render(); },
+  focusSubnet(id) { state.focus = id; state.mapSel = null; const sn = SUBNETS.find(x => x.id === id); if (sn) { const w = 520, h = w * (MAP_H / 1240); state.mapView = { x: sn.x - w / 2, y: sn.y - h / 2, w, h }; } render(); },
+  zoomBy(f) { const v = state.mapView || { x: 0, y: 0, w: 1240, h: MAP_H }; const cx = v.x + v.w / 2, cy = v.y + v.h / 2; let nw = Math.min(1240, Math.max(180, v.w * f)), nh = nw * (MAP_H / 1240); state.mapView = { x: cx - nw / 2, y: cy - nh / 2, w: nw, h: nh }; render(); },
+  zoomFit() { state.mapView = null; render(); },
   showMore() { state.limit += 40; render(); },
   openDrawer(id) { state.drawer = id; render(); },
   closeDrawer() { state.drawer = null; render(); },
@@ -631,8 +676,8 @@ const App = {
   rescan(id) { const a = byId[id]; state.drawer = null; state.screen = "scan"; state.range = a ? a.subnetName : ""; render(); },
   exportCsv() {
     const rows = filtered();
-    const head = ["CI", "Hostname", "IP", "MAC", "Tipo", "SO", "Sub-rede", "Portas abertas"];
-    const csv = [head, ...rows.map(a => [a.ci, a.host, a.ip, a.mac, a.type, a.os, a.subnetName, a.ports.map(p => p.port + (p.service ? "/" + p.service : "")).join(" ")])].map(r => r.map(x => `"${x}"`).join(";")).join("\n");
+    const head = ["CI", "IP", "Hostname", "MAC", "Tipo", "SO", "Sub-rede", "Portas abertas"];
+    const csv = [head, ...rows.map(a => [a.ci, a.ip, a.hostname, a.mac, a.type, a.os, a.subnetName, a.ports.map(p => p.port + (p.service ? "/" + p.service : "")).join(" ")])].map(r => r.map(x => `"${x}"`).join(";")).join("\n");
     const el = document.createElement("a");
     el.href = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv" }));
     el.download = "cmdb-ativos.csv"; el.click();

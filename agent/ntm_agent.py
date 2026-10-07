@@ -543,18 +543,81 @@ def run_scan(cfg, plat, stop, ranges=None):
     log("scan complete in %ds: %d live, %d named, %d with open ports" % (time.time() - start, len(live), named, with_ports))
 
 
+def nbstat(ip, timeout=1.0):
+    """NetBIOS node status (NBSTAT) query to UDP/137 to learn a host's NetBIOS
+    computer name. Works on Windows/SMB hosts with no DNS at all. Returns "" when
+    the host does not answer (non-Windows, filtered)."""
+    tid = os.urandom(2)
+    header = tid + b"\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00"  # flags + qdcount=1
+    name = b"*" + b"\x00" * 15  # wildcard name "*"
+    enc = bytearray()
+    for byte in name:
+        enc.append(0x41 + (byte >> 4))
+        enc.append(0x41 + (byte & 0x0F))
+    qname = bytes([0x20]) + bytes(enc) + b"\x00"
+    packet = header + qname + b"\x00\x21" + b"\x00\x01"  # NBSTAT(0x21), class IN
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.settimeout(timeout)
+    try:
+        s.sendto(packet, (ip, 137))
+        data, _ = s.recvfrom(2048)
+    except (socket.timeout, OSError):
+        return ""
+    finally:
+        s.close()
+    try:
+        # Response header is 12 bytes; the question is NOT echoed. The answer
+        # name is either a full encoded name or a 2-byte compression pointer.
+        off = 12
+        if data[off] & 0xC0 == 0xC0:
+            off += 2
+        else:
+            off += 1 + data[off] + 1  # length byte + name + null terminator
+        off += 2 + 2 + 4 + 2          # type, class, ttl, rdlength
+        num = data[off]; off += 1
+        best = ""
+        for _ in range(num):
+            raw = data[off:off + 15]
+            suffix = data[off + 15]
+            flags = int.from_bytes(data[off + 16:off + 18], "big")
+            group = bool(flags & 0x8000)
+            off += 18
+            nm = raw.decode("ascii", "ignore").rstrip(" \x00").strip()
+            if suffix == 0x00 and not group and nm and nm != "__MSBROWSE__":
+                return nm           # unique workstation name
+            if suffix == 0x20 and not group and nm and not best:
+                best = nm           # server service name, fallback
+        return best
+    except (IndexError, UnicodeDecodeError):
+        return ""
+
+
+def resolve_one(ip):
+    """Resolve a host name: reverse DNS (PTR) first, then NetBIOS (Windows)."""
+    try:
+        name, _, addrs = socket.gethostbyaddr(ip)
+        return ip, name, "PTR", addrs
+    except (socket.herror, socket.gaierror, OSError):
+        pass
+    nb = nbstat(ip)
+    if nb:
+        return ip, nb, "NetBIOS", []
+    return ip, "", "", []
+
+
 def resolve_hostnames(ips):
     hosts, dns, seen = [], [], set()
-    for ip in ips:
-        try:
-            name, aliases, addrs = socket.gethostbyaddr(ip)
-        except (socket.herror, socket.gaierror, OSError):
-            continue
-        hosts.append({"ip": ip, "hostname": name})
-        for key in [("PTR", name, ip)] + [("A", name, a) for a in addrs]:
-            if key not in seen:
-                seen.add(key)
-                dns.append({"host_ip": ip, "name": key[1], "type": key[0], "value": key[2]})
+    with ThreadPoolExecutor(max_workers=64) as pool:
+        for ip, name, typ, addrs in pool.map(resolve_one, ips):
+            if not name:
+                continue
+            hosts.append({"ip": ip, "hostname": name})
+            dns.append({"host_ip": ip, "name": name, "type": typ, "value": ip})
+            for a in addrs:
+                key = ("A", name, a)
+                if key not in seen:
+                    seen.add(key)
+                    dns.append({"host_ip": ip, "name": name, "type": "A", "value": a})
     return hosts, dns
 
 
