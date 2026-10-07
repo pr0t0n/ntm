@@ -91,7 +91,17 @@ func (s *Store) migrate(ctx context.Context) error {
 		    next_run     TIMESTAMPTZ NOT NULL DEFAULT now(),
 		    last_run     TIMESTAMPTZ,
 		    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-		);`)
+		);
+		CREATE TABLE IF NOT EXISTS alerts (
+		    id       BIGSERIAL PRIMARY KEY,
+		    ts       TIMESTAMPTZ NOT NULL DEFAULT now(),
+		    host_ip  TEXT NOT NULL,
+		    kind     TEXT NOT NULL,
+		    detail   TEXT NOT NULL DEFAULT '',
+		    severity TEXT NOT NULL DEFAULT 'info',
+		    acked    BOOLEAN NOT NULL DEFAULT false
+		);
+		CREATE INDEX IF NOT EXISTS idx_alerts_ts ON alerts (ts DESC);`)
 	return err
 }
 
@@ -397,6 +407,9 @@ func (s *Store) ResetInventory(ctx context.Context) (models.ResetResult, error) 
 	if _, err := tx.Exec(ctx, `TRUNCATE changes RESTART IDENTITY`); err != nil {
 		return res, err
 	}
+	if _, err := tx.Exec(ctx, `TRUNCATE alerts RESTART IDENTITY`); err != nil {
+		return res, err
+	}
 	return res, tx.Commit(ctx)
 }
 
@@ -455,6 +468,12 @@ func (s *Store) recordChange(ctx context.Context, ip, kind, detail string) {
 	_, _ = s.pool.Exec(ctx, `INSERT INTO changes (host_ip, kind, detail) VALUES ($1,$2,$3)`, ip, kind, detail)
 }
 
+var sensitivePorts = map[int]bool{21: true, 23: true, 139: true, 445: true, 1433: true, 2049: true, 2375: true, 3306: true, 3389: true, 5432: true, 5900: true, 5985: true, 6379: true, 9200: true, 27017: true}
+
+func (s *Store) recordAlert(ctx context.Context, ip, kind, detail, severity string) {
+	_, _ = s.pool.Exec(ctx, `INSERT INTO alerts (host_ip, kind, detail, severity) VALUES ($1,$2,$3,$4)`, ip, kind, detail, severity)
+}
+
 // RecentChanges returns the latest change-log entries, optionally for one IP.
 func (s *Store) RecentChanges(ctx context.Context, ip string, limit int) ([]models.Change, error) {
 	if limit <= 0 || limit > 500 {
@@ -497,6 +516,7 @@ func (s *Store) UpsertPingHost(ctx context.Context, h models.ReportedHost, agent
 		h.IP, h.MAC, h.Vendor, agentID).Scan(&inserted)
 	if err == nil && inserted {
 		s.recordChange(ctx, h.IP, "host_novo", "Host descoberto na rede")
+		s.recordAlert(ctx, h.IP, "novo_dispositivo", "Novo dispositivo descoberto na rede", "info")
 	}
 	return err
 }
@@ -556,6 +576,9 @@ func (s *Store) ReplacePorts(ctx context.Context, ip string, ports []models.Repo
 	for pt := range newPorts {
 		if !oldPorts[pt] && len(oldPorts) > 0 {
 			s.recordChange(ctx, ip, "porta_aberta", fmt.Sprintf("Porta %d aberta", pt))
+			if sensitivePorts[pt] {
+				s.recordAlert(ctx, ip, "servico_sensivel", fmt.Sprintf("Serviço sensível exposto: porta %d", pt), "alerta")
+			}
 		}
 	}
 	for pt := range oldPorts {
@@ -878,6 +901,43 @@ func (s *Store) RunDueSchedules(ctx context.Context) int {
 	}
 	return n
 }
+
+// --- Alerts ---
+
+func (s *Store) RecentAlerts(ctx context.Context, limit int) ([]models.Alert, int, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	var unacked int
+	_ = s.pool.QueryRow(ctx, `SELECT count(*) FROM alerts WHERE NOT acked`).Scan(&unacked)
+	rows, err := s.pool.Query(ctx, `SELECT id, ts, host_ip, kind, detail, severity, acked FROM alerts ORDER BY ts DESC LIMIT $1`, limit)
+	if err != nil {
+		return nil, unacked, err
+	}
+	defer rows.Close()
+	var out []models.Alert
+	for rows.Next() {
+		var a models.Alert
+		if err := rows.Scan(&a.ID, &a.TS, &a.HostIP, &a.Kind, &a.Detail, &a.Severity, &a.Acked); err != nil {
+			return nil, unacked, err
+		}
+		out = append(out, a)
+	}
+	return out, unacked, rows.Err()
+}
+
+func (s *Store) AckAlert(ctx context.Context, id int64) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE alerts SET acked=true WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) AckAllAlerts(ctx context.Context) { _, _ = s.pool.Exec(ctx, `UPDATE alerts SET acked=true WHERE NOT acked`) }
 
 var ErrNotFound = errors.New("not found")
 

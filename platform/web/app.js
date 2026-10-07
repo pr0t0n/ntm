@@ -36,6 +36,9 @@ let byId = {};
 let byIP = {};
 let CHANGES = [];
 let SCHEDULES = [];
+let ALERTS = [];
+let UNACKED = 0;
+const SEV = { alerta: "var(--color-accent-300)", info: "var(--color-neutral-400)" };
 const CHANGE_KIND = {
   host_novo: { icon: "ph-plus-circle", label: "Novo host", tone: "var(--color-accent-400)" },
   hostname: { icon: "ph-identification-card", label: "Hostname", tone: "var(--color-accent-300)" },
@@ -103,6 +106,7 @@ async function loadAssets() {
   buildSubnets();
   try { CHANGES = (await getJSON(`${API}/changes?limit=200`)).changes || []; } catch (e) { CHANGES = []; }
   try { SCHEDULES = (await getJSON(`${API}/schedules`)).schedules || []; } catch (e) { SCHEDULES = []; }
+  try { const d = await getJSON(`${API}/alerts?limit=200`); ALERTS = d.alerts || []; UNACKED = d.unacked || 0; } catch (e) { ALERTS = []; UNACKED = 0; }
 }
 
 function buildSubnets() {
@@ -157,18 +161,21 @@ function dayLabel(d) { const dt = new Date(Date.now() - d * 86400000); return dt
 // ============================ RENDER ============================
 function render() {
   renderNav();
-  const titles = { dash: "Dashboard", map: "Mapa de rede", cmdb: "CMDB", changes: "Mudanças", scan: "Varredura" };
+  const titles = { dash: "Dashboard", map: "Mapa de rede", cmdb: "CMDB", changes: "Mudanças", alerts: "Alertas", scan: "Varredura" };
   document.getElementById("title").textContent = titles[state.screen];
   document.getElementById("crumb").textContent = titles[state.screen];
   const scr = document.getElementById("screen");
   scr.innerHTML = state.screen === "dash" ? viewDash()
     : state.screen === "cmdb" ? viewCmdb()
     : state.screen === "changes" ? viewChanges()
+    : state.screen === "alerts" ? viewAlerts()
     : state.screen === "scan" ? viewScan()
     : viewMap();
   document.getElementById("drawer").innerHTML = state.drawer ? viewDrawer() : "";
   renderCollector();
   if (state.screen === "map") wireMap();
+  const badge = document.getElementById("alertsBadge");
+  if (badge) { badge.textContent = UNACKED > 99 ? "99+" : UNACKED; badge.style.display = UNACKED > 0 ? "grid" : "none"; }
 }
 
 // wireMap adds wheel-zoom (toward the cursor) and drag-to-pan on the map SVG by
@@ -640,6 +647,24 @@ function viewChanges() {
   </div>`;
 }
 
+// ---------------- ALERTAS ----------------
+function viewAlerts() {
+  return `<div style="display:flex;flex-direction:column;gap:16px">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <p style="margin:0;font-size:14px;color:var(--color-neutral-400);flex:1;min-width:260px">Novos dispositivos e serviços sensíveis detectados pelas varreduras. ${UNACKED} não lido(s).</p>
+      ${ALERTS.some(a => !a.acked) ? `<button class="btn btn-secondary" onclick="App.ackAll()"><i class="ph ph-checks"></i>Marcar todos como lidos</button>` : ""}
+    </div>
+    <section style="padding:14px 20px;border-radius:var(--radius-md);background:var(--color-surface);box-shadow:var(--shadow-sm);display:flex;flex-direction:column">
+      ${ALERTS.map(a => { const sev = SEV[a.severity] || "var(--color-neutral-400)"; const host = byIP[a.host_ip]; return `<div style="display:flex;gap:12px;align-items:center;padding:11px 0;opacity:${a.acked ? ".5" : "1"};background:linear-gradient(to right,transparent,color-mix(in srgb,var(--color-text) 8%,transparent) 48px,color-mix(in srgb,var(--color-text) 8%,transparent) calc(100% - 48px),transparent) no-repeat bottom/100% 1px">
+        <div style="width:32px;height:32px;flex:none;border-radius:var(--radius-md);display:grid;place-items:center;background:var(--color-bg);color:${sev}"><i class="ph ${a.kind === "servico_sensivel" ? "ph-shield-warning" : "ph-plus-circle"}"></i></div>
+        <div ${host ? `onclick="App.openDrawer('${host.id}')" style="cursor:pointer"` : ""} style="flex:1;min-width:0;display:flex;flex-direction:column"><span style="font-size:13.5px">${esc(a.detail)}</span><span style="font-size:12px;color:var(--color-neutral-500);font-family:ui-monospace,monospace">${esc(a.host_ip)}${host && host.hostname ? " · " + esc(host.hostname) : ""}</span></div>
+        <span style="font-size:11.5px;color:var(--color-neutral-500);white-space:nowrap">${new Date(a.ts).toLocaleString("pt-BR")}</span>
+        ${a.acked ? `<span style="font-size:11px;color:var(--color-neutral-600)">lido</span>` : `<button class="btn btn-ghost" style="font-size:12px" onclick="App.ack('${a.id}')">Marcar lido</button>`}
+      </div>`; }).join("") || `<span style="font-size:13px;color:var(--color-neutral-500);padding:16px 0">Nenhum alerta. Novos dispositivos e serviços sensíveis aparecerão aqui.</span>`}
+    </section>
+  </div>`;
+}
+
 // ---------------- VARREDURA ----------------
 function viewScan() {
   const s = state;
@@ -850,6 +875,8 @@ const App = {
     try { const r = await fetch(`${API}/install-tokens`, { method: "POST" }); const d = await r.json(); state.installToken = d.install_token || null; } catch (e) { console.error(e); alert("Falha ao gerar instalação."); return; }
     state.screen = "scan"; render();
   },
+  async ack(id) { try { await fetch(`${API}/alerts/${id}/ack`, { method: "POST" }); await refresh(); } catch (e) { console.error(e); } },
+  async ackAll() { try { await fetch(`${API}/alerts/ack-all`, { method: "POST" }); await refresh(); } catch (e) { console.error(e); } },
   copy(txt) { if (!txt) return; (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).catch(() => { const t = document.createElement("textarea"); t.value = txt; document.body.appendChild(t); t.select(); try { document.execCommand("copy"); } catch (e) {} t.remove(); }); },
   setAgent(id) { state.agentId = id; render(); },
   onRange(v) { state.range = v; },
@@ -893,6 +920,7 @@ function wireHeader() {
     const f = document.getElementById("globalSearch"); if (f) { f.focus(); const v = f.value; f.value = ""; f.value = v; }
   });
   document.getElementById("goScan").addEventListener("click", () => App.go("scan"));
+  document.getElementById("alertsBell").addEventListener("click", () => App.go("alerts"));
 }
 
 async function refresh() {

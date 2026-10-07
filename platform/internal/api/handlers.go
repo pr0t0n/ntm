@@ -53,6 +53,9 @@ func (s *Server) Routes(web http.Handler) http.Handler {
 	mux.HandleFunc("POST /api/v1/hosts/{id}/annotations", s.handleAnnotate)
 	mux.HandleFunc("GET /api/v1/network-map", s.handleMap)
 	mux.HandleFunc("GET /api/v1/changes", s.handleChanges)
+	mux.HandleFunc("GET /api/v1/alerts", s.handleAlerts)
+	mux.HandleFunc("POST /api/v1/alerts/{id}/ack", s.handleAckAlert)
+	mux.HandleFunc("POST /api/v1/alerts/ack-all", s.handleAckAll)
 	mux.HandleFunc("POST /api/v1/reset", s.handleReset)
 	mux.HandleFunc("POST /api/v1/install-tokens", func(w http.ResponseWriter, r *http.Request) {
 		token, err := s.store.CreateInstallToken(r.Context(), "")
@@ -520,6 +523,40 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 		changes = []models.Change{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"changes": changes})
+}
+
+func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	alerts, unacked, err := s.store.RecentAlerts(r.Context(), limit)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "alerts error")
+		return
+	}
+	if alerts == nil {
+		alerts = []models.Alert{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"alerts": alerts, "unacked": unacked})
+}
+
+func (s *Server) handleAckAlert(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	if err := s.store.AckAlert(r.Context(), id); errors.Is(err, db.ErrNotFound) {
+		httpError(w, http.StatusNotFound, "not found")
+		return
+	} else if err != nil {
+		httpError(w, http.StatusInternalServerError, "error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleAckAll(w http.ResponseWriter, r *http.Request) {
+	s.store.AckAllAlerts(r.Context())
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // --- helpers ---

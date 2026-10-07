@@ -135,6 +135,17 @@ type AppCount struct {
 	Count int    `json:"count"`
 }
 
+// Alert is a notable discovery event the operator should notice.
+type Alert struct {
+	ID       int64     `json:"id"`
+	TS       time.Time `json:"ts"`
+	HostIP   string    `json:"host_ip"`
+	Kind     string    `json:"kind"`
+	Detail   string    `json:"detail"`
+	Severity string    `json:"severity"`
+	Acked    bool      `json:"acked"`
+}
+
 // Schedule is a recurring scan: a collector + range run every interval_min.
 type Schedule struct {
 	ID          int64      `json:"id"`
