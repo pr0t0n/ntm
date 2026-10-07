@@ -644,9 +644,8 @@ function viewScan() {
           <pre style="margin:0;background:var(--color-bg);border-radius:var(--radius-md);padding:12px 14px;font-family:ui-monospace,monospace;font-size:12px;color:var(--color-neutral-300);overflow-x:auto;white-space:pre;line-height:1.6">sudo apt-get install -y python3
 export NTM_PLATFORM_URL=https://&lt;plataforma&gt;:8443
 export NTM_INSTALL_TOKEN=&lt;token-de-instalação&gt;
-export NTM_RANGES=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
 sudo -E python3 ntm_agent.py</pre>
-          <span style="font-size:11.5px;color:var(--color-neutral-500)">O coletor faz o enrollment na plataforma e passa a aparecer na lista abaixo. Em produção, instale como serviço (systemd).</span>
+          <span style="font-size:11.5px;color:var(--color-neutral-500)">O coletor só precisa da URL da plataforma e do token. <strong style="color:var(--color-neutral-400);font-weight:500">O range a varrer é definido aqui na plataforma</strong>, por varredura (campo Escopo). Em produção, instale como serviço (systemd).</span>
         </div>
       </div>
     </section>
