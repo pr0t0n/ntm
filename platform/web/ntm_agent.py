@@ -18,6 +18,7 @@ NTM_STATE_PATH, NTM_TLS_INSECURE, NTM_SCAN_INTERVAL, NTM_POLL_INTERVAL,
 NTM_PING_RATE, NTM_PING_TIMEOUT, NTM_DNS_RESOLVER, plus NTM_PORT_WORKERS and
 NTM_CONNECT_TIMEOUT for the Python port scan.
 """
+import errno
 import ipaddress
 import json
 import os
@@ -122,6 +123,10 @@ class Config:
         # Networks/IPs to never inventory (e.g. the Docker infra network). The
         # agent's own host and the platform are always excluded on top of this.
         self.exclude = [r.strip() for r in env("NTM_EXCLUDE", "").split(",") if r.strip()]
+        # Phase 1 also probes these TCP ports so hosts that block ICMP (e.g.
+        # Windows firewall) are still discovered. Empty disables TCP discovery.
+        self.discovery_ports = [int(x) for x in env("NTM_DISCOVERY_PORTS", "445,139,135,3389,80,443,22").split(",") if x.strip().isdigit()]
+        self.discovery_workers = max(1, int(env("NTM_DISCOVERY_WORKERS", "500")))
 
 
 def parse_duration(s, default):
@@ -325,6 +330,64 @@ def ping_sweep(cfg, ranges, stop, on_batch, exclude_nets=None):
     return ttl_by_ip
 
 
+# --- Phase 1b: TCP discovery for hosts that block ICMP --------------------
+
+def tcp_discover(cfg, ranges, exclude_nets, stop, known, on_batch):
+    """Find hosts that did not answer ICMP but have a reachable TCP port (open or
+    refused → the host is up). Complements the ping sweep so ping-blocking hosts
+    (common on Windows) are still discovered. Streams newly-found live hosts."""
+    ports = cfg.discovery_ports
+    if not ports:
+        return []
+    timeout = min(0.6, cfg.connect_timeout)
+
+    def alive(ip):
+        for port in ports:
+            if stop.is_set():
+                return None
+            sk = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sk.settimeout(timeout)
+            try:
+                rc = sk.connect_ex((ip, port))
+                if rc == 0 or rc == errno.ECONNREFUSED:
+                    return ip
+            except OSError:
+                pass
+            finally:
+                sk.close()
+        return None
+
+    found = []
+    with ThreadPoolExecutor(max_workers=cfg.discovery_workers) as pool:
+        for cidr in ranges:
+            if stop.is_set():
+                break
+            net = ipaddress.ip_network(cidr, strict=False)
+            chunk = []
+            def flush_chunk():
+                if not chunk:
+                    return
+                batch = []
+                for ip in pool.map(alive, chunk):
+                    if ip:
+                        batch.append({"ip": ip, "status": "up"})
+                        found.append(ip)
+                chunk.clear()
+                if batch:
+                    on_batch(batch)
+            for host in net.hosts():
+                if stop.is_set():
+                    break
+                ip = str(host)
+                if ip in known or is_excluded(ip, exclude_nets):
+                    continue
+                chunk.append(ip)
+                if len(chunk) >= 2000:
+                    flush_chunk()
+            flush_chunk()
+    return found
+
+
 # --- Phase 3/4: Python TCP connect scan with banner + OS detection --------
 
 def grab_banner(ip, port, timeout):
@@ -480,6 +543,17 @@ def run_scan(cfg, plat, stop, ranges=None):
         log("scan stopped during ping — stored hosts are kept")
         plat.status("idle")
         return
+    # Phase 1b — TCP discovery for hosts that block ICMP (e.g. Windows firewall).
+    if cfg.discovery_ports and not stop.is_set():
+        known = set(live)
+        log("phase 1/4 tcp-discovery on ports %s (hosts that block ICMP)" % ",".join(map(str, cfg.discovery_ports)))
+        def on_tcp(batch):
+            plat.upload_phase("ping", batch)
+            for h in batch:
+                live.append(h["ip"]); ttl_by_ip.setdefault(h["ip"], None)
+            log("phase 1/4 tcp-discovery: %d total live host(s)" % len(live))
+        extra = tcp_discover(cfg, ranges, exclude_nets, stop, known, on_tcp)
+        log("phase 1/4 tcp-discovery done: +%d host(s)" % len(extra))
     log("phase 1/4 ping done: %d live host(s) (%ds)" % (len(live), time.time() - start))
 
     # Phase 2 — hostname (reverse DNS).

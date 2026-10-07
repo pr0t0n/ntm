@@ -293,6 +293,13 @@ func (s *Store) SetRunning(ctx context.Context, id int64) {
 // SetPhase records which discovery phase (ping | hostname | ports | detect) the
 // agent has entered, so the UI can show the phase and its elapsed time.
 func (s *Store) SetPhase(ctx context.Context, id int64, phase string) {
+	// "ping" is the first phase of a run: reset the per-scan counter and start time.
+	if phase == "ping" {
+		_, _ = s.pool.Exec(ctx,
+			`UPDATE agents SET scan_state='running', scan_phase=$2, phase_started_at=now(),
+			        scan_started_at=now(), scan_hosts=0 WHERE id=$1`, id, phase)
+		return
+	}
 	_, _ = s.pool.Exec(ctx,
 		`UPDATE agents SET scan_state='running', scan_phase=$2, phase_started_at=now(),
 		        scan_started_at=COALESCE(scan_started_at, now()) WHERE id=$1`, id, phase)

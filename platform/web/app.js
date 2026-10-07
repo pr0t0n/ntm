@@ -625,6 +625,31 @@ function viewScan() {
       </section>
       <section style="${card.replace("gap:16px", "gap:14px")}">${runHtml}</section>
     </div>
+    <section style="padding:18px 20px;border-radius:var(--radius-md);background:var(--color-surface);box-shadow:var(--shadow-sm);display:flex;flex-direction:column;gap:14px">
+      <div style="display:flex;align-items:baseline;gap:10px"><h4 style="margin:0;font-size:16px">Instalação do coletor</h4><span style="font-size:12px;color:var(--color-neutral-500)">agente de descoberta</span></div>
+      <div style="display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start">
+        <div style="display:flex;flex-direction:column;gap:12px;min-width:230px">
+          <div style="display:flex;flex-direction:column;gap:5px">
+            <span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500)">Sistemas aceitos</span>
+            <div style="display:flex;gap:6px;flex-wrap:wrap"><span class="tag tag-accent"><i class="ph ph-linux-logo"></i>&nbsp;Linux (x86-64 / ARM64)</span></div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:5px">
+            <span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500)">Requisitos</span>
+            <span style="font-size:12.5px;color:var(--color-neutral-300)">Python 3 · privilégio root / <code style="font-family:ui-monospace,monospace">CAP_NET_RAW</code> (ICMP e descoberta TCP)</span>
+          </div>
+          <a class="btn btn-primary" href="/ntm_agent.py" download="ntm_agent.py" style="align-self:flex-start"><i class="ph ph-download-simple"></i>Baixar agente</a>
+        </div>
+        <div style="flex:1;min-width:320px;display:flex;flex-direction:column;gap:6px">
+          <span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500)">Instalação (host Linux)</span>
+          <pre style="margin:0;background:var(--color-bg);border-radius:var(--radius-md);padding:12px 14px;font-family:ui-monospace,monospace;font-size:12px;color:var(--color-neutral-300);overflow-x:auto;white-space:pre;line-height:1.6">sudo apt-get install -y python3
+export NTM_PLATFORM_URL=https://&lt;plataforma&gt;:8443
+export NTM_INSTALL_TOKEN=&lt;token-de-instalação&gt;
+export NTM_RANGES=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+sudo -E python3 ntm_agent.py</pre>
+          <span style="font-size:11.5px;color:var(--color-neutral-500)">O coletor faz o enrollment na plataforma e passa a aparecer na lista abaixo. Em produção, instale como serviço (systemd).</span>
+        </div>
+      </div>
+    </section>
     <section style="padding:14px 18px;border-radius:var(--radius-md);background:var(--color-surface);box-shadow:var(--shadow-sm);display:flex;flex-direction:column;gap:6px;overflow-x:auto">
       <h4 style="margin:0;font-size:16px">Coletores registrados</h4>
       <table class="table" style="font-size:13px;min-width:600px">
