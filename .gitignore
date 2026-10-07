@@ -9,3 +9,6 @@ platform/certs/
 # Python
 __pycache__/
 *.pyc
+
+# Imported design reference (not app code)
+design-ref/

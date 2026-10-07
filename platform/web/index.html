@@ -3,206 +3,49 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>NTM — Network Threat Monitoring</title>
+  <title>Atlas CMDB</title>
+  <link rel="icon" href="data:," />
   <link rel="stylesheet" href="/style.css" />
-  <script src="/vendor/chart.umd.min.js" defer></script>
-  <script src="/vendor/cytoscape.min.js" defer></script>
+  <script src="https://unpkg.com/@phosphor-icons/web@2.1.1" defer></script>
   <script src="/app.js" defer></script>
+  <style>
+    body { margin: 0; background: var(--color-bg); }
+  </style>
 </head>
 <body>
-  <div class="app">
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-mark">NTM</div>
-        <div class="brand-sub">Network Threat Monitoring</div>
+  <div style="display:flex;min-height:100vh;color:var(--color-text);font-family:var(--font-body);font-variant-numeric:tabular-nums">
+    <aside style="width:228px;flex:none;display:flex;flex-direction:column;gap:3px;padding:18px 12px;background:linear-gradient(180deg,var(--color-surface),var(--color-bg) 70%);height:100vh;position:sticky;top:0">
+      <div style="display:flex;align-items:center;gap:10px;padding:4px 8px 22px">
+        <div style="width:30px;height:30px;border-radius:var(--radius-md);display:grid;place-items:center;border:1px solid var(--color-accent);color:var(--color-accent);box-shadow:0 0 18px color-mix(in srgb,var(--color-accent) 35%,transparent)"><i class="ph ph-graph" style="font-size:17px"></i></div>
+        <div style="display:flex;flex-direction:column;line-height:1.2"><span style="font-weight:500;font-size:15px">Atlas CMDB</span><span style="font-size:11px;color:var(--color-neutral-500)">Gestão de ativos</span></div>
       </div>
-      <nav class="nav">
-        <button class="nav-item active" data-view="dashboard">
-          <span class="ico">▦</span><span>Dashboard</span>
-        </button>
-        <button class="nav-item" data-view="map">
-          <span class="ico">◈</span><span>Mapa de Rede</span>
-        </button>
-        <button class="nav-item" data-view="cmdb">
-          <span class="ico">▤</span><span>CMDB</span>
-        </button>
-        <button class="nav-item" data-view="scan">
-          <span class="ico">◎</span><span>Varredura</span>
-        </button>
-      </nav>
-      <div class="sidebar-foot">
-        <div id="agentStatus" class="agent-status">— agentes</div>
-        <button id="refreshBtn" class="refresh">↻ Atualizar</button>
+      <div style="font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-neutral-600);padding:0 10px 6px">Plataforma</div>
+      <div id="nav"></div>
+      <div style="margin-top:auto;display:flex;flex-direction:column;gap:8px;padding:12px;border-radius:var(--radius-md);box-shadow:var(--shadow-sm)">
+        <div id="collectorStatus" style="display:flex;align-items:center;gap:8px;font-size:12px"><span style="width:7px;height:7px;border-radius:50%;background:var(--color-accent-400);box-shadow:0 0 8px var(--color-accent)"></span>Coletor —</div>
+        <div id="collectorSub" style="font-size:11.5px;color:var(--color-neutral-500);line-height:1.45">—</div>
       </div>
     </aside>
 
-    <main class="content">
-      <!-- DASHBOARD -->
-      <section id="view-dashboard" class="view active">
-        <header class="view-head">
-          <h1>Dashboard</h1>
-          <p class="muted">Inventário de ativos descobertos na rede</p>
-        </header>
-
-        <div class="cards">
-          <div class="card kpi"><div class="kpi-label">Total de Hosts</div><div class="kpi-value" id="kpiTotal">—</div><div class="kpi-foot"><span class="up" id="kpiUp">0 up</span> · <span class="down" id="kpiDown">0 down</span></div></div>
-          <div class="card kpi"><div class="kpi-label">Computadores</div><div class="kpi-value" id="kpiComputers">—</div><div class="kpi-foot">estações de trabalho</div></div>
-          <div class="card kpi"><div class="kpi-label">Servidores</div><div class="kpi-value" id="kpiServers">—</div><div class="kpi-foot">serviços expostos</div></div>
-          <div class="card kpi"><div class="kpi-label">Equipamentos</div><div class="kpi-value" id="kpiNetwork">—</div><div class="kpi-foot">rede / impressoras</div></div>
-          <div class="card kpi"><div class="kpi-label">Portas Abertas</div><div class="kpi-value" id="kpiPorts">—</div><div class="kpi-foot">TCP em escuta</div></div>
+    <main style="flex:1;min-width:0;display:flex;flex-direction:column">
+      <header style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:20px 32px 16px">
+        <div style="display:flex;flex-direction:column;gap:2px;margin-right:auto">
+          <div style="font-size:12px;color:var(--color-neutral-500)">Atlas CMDB / <span id="crumb">Dashboard</span></div>
+          <h1 id="title" style="font-size:26px;margin:0">Dashboard</h1>
         </div>
-
-        <div class="charts">
-          <div class="card chart-card">
-            <h3>Hosts por Tipo</h3>
-            <canvas id="chartAssets" height="220"></canvas>
-          </div>
-          <div class="card chart-card">
-            <h3>Sistemas Operacionais</h3>
-            <canvas id="chartOS" height="220"></canvas>
-          </div>
-          <div class="card chart-card wide">
-            <h3>Aplicações (Top 10)</h3>
-            <canvas id="chartApps" height="220"></canvas>
-          </div>
+        <div style="display:flex;align-items:center;gap:8px;padding:0 12px;height:36px;border-radius:var(--radius-md);background:var(--color-surface);box-shadow:var(--shadow-sm);width:260px;max-width:100%">
+          <i class="ph ph-magnifying-glass" style="color:var(--color-neutral-500)"></i>
+          <input id="globalSearch" placeholder="Buscar hostname, IP, MAC…" style="flex:1;min-width:0;background:transparent;border:0;color:var(--color-text);font:inherit;font-size:13px;outline:none">
         </div>
+        <button class="btn btn-primary" id="goScan"><i class="ph ph-broadcast"></i>Nova varredura</button>
+      </header>
 
-        <div class="card nopad">
-          <h3 style="padding:18px 18px 0">Ativos</h3>
-          <div class="tbl-scroll">
-            <table class="tbl" id="recentTable">
-              <thead><tr><th>IP</th><th>Hostname</th><th>Tipo</th><th>SO</th><th>Status</th></tr></thead>
-              <tbody></tbody>
-            </table>
-          </div>
-          <div id="recentPager" class="pager hidden">
-            <button id="recentPrev" class="pager-btn">‹ Anterior</button>
-            <span id="recentPageInfo" class="pager-info">—</span>
-            <button id="recentNext" class="pager-btn">Próximo ›</button>
-          </div>
-        </div>
-      </section>
-
-      <!-- NETWORK MAP -->
-      <section id="view-map" class="view">
-        <header class="view-head">
-          <h1>Mapa de Rede</h1>
-          <p class="muted">Interligações dos sistemas até a borda (Internet)</p>
-        </header>
-        <div class="map-legend">
-          <span><i class="dot net-internet"></i> Internet</span>
-          <span><i class="dot net-subnet"></i> Sub-rede</span>
-          <span><i class="dot net-server"></i> Servidor</span>
-          <span><i class="dot net-computer"></i> Computador</span>
-          <span><i class="dot net-network"></i> Equipamento</span>
-        </div>
-        <div id="cy" class="cy"></div>
-      </section>
-
-      <!-- CMDB -->
-      <section id="view-cmdb" class="view">
-        <header class="view-head">
-          <h1>CMDB</h1>
-          <p class="muted">Base de ativos — busca por IP, Hostname, Aplicação ou Porta</p>
-        </header>
-        <div class="search-bar">
-          <select id="searchField">
-            <option value="all">Todos os campos</option>
-            <option value="ip">IP</option>
-            <option value="hostname">Hostname</option>
-            <option value="app">Aplicação</option>
-            <option value="port">Porta</option>
-          </select>
-          <input id="searchInput" type="text" placeholder="Pesquisar ativos… (ex: 192.168.1.10, dns, 443)" />
-          <button id="searchBtn">Buscar</button>
-          <span id="searchCount" class="muted"></span>
-          <button id="resetBtn" class="reset-btn" title="Apaga todos os ativos, portas e registros DNS">⟲ RESET</button>
-        </div>
-        <div class="card nopad">
-          <div class="tbl-scroll">
-            <table class="tbl cmdb">
-              <thead><tr><th>IP</th><th>Hostname</th><th>Tipo</th><th>SO</th><th>MAC / Vendor</th><th>Portas / Apps</th><th>Status</th></tr></thead>
-              <tbody id="cmdbBody"></tbody>
-            </table>
-          </div>
-          <div id="cmdbPager" class="pager hidden">
-            <button id="cmdbPrev" class="pager-btn">‹ Anterior</button>
-            <span id="cmdbPageInfo" class="pager-info">—</span>
-            <button id="cmdbNext" class="pager-btn">Próximo ›</button>
-          </div>
-        </div>
-      </section>
-
-      <!-- VARREDURA (Scan) -->
-      <section id="view-scan" class="view">
-        <header class="view-head">
-          <h1>Varredura</h1>
-          <p class="muted">Selecione o agente, informe o range e execute a descoberta</p>
-        </header>
-
-        <div class="card scan-panel">
-          <div class="scan-row">
-            <label class="scan-field">
-              <span class="field-label">Agente</span>
-              <select id="agentSelect"><option value="">Carregando agentes…</option></select>
-            </label>
-            <div class="scan-field">
-              <span class="field-label">IP do agente</span>
-              <span id="agentIp" class="field-static">—</span>
-            </div>
-          </div>
-          <div class="scan-row">
-            <label class="scan-field grow">
-              <span class="field-label">Range a varrer (CIDR, separado por vírgula)</span>
-              <input id="rangeInput" type="text" placeholder="ex: 192.168.0.0/24" />
-            </label>
-            <div class="scan-field">
-              <span class="field-label">Sugestão</span>
-              <button id="useSuggested" type="button" class="chip-btn" title="Usar a sugestão baseada no IP do agente">↳ <span id="suggestedRange">—</span></button>
-            </div>
-          </div>
-          <div class="scan-actions">
-            <button id="runBtn" class="run-btn">▶ RODAR</button>
-            <button id="stopBtn" class="stop-btn hidden">⏹ PARAR</button>
-            <span id="runnerMsg" class="muted"></span>
-          </div>
-          <div id="scanProgress" class="scan-progress hidden">
-            <div class="scan-range-line">Varrendo <span id="spRange">—</span></div>
-            <ol class="phases">
-              <li data-phase="ping"><span class="num">1</span>Ping</li>
-              <li data-phase="hostname"><span class="num">2</span>Hostname</li>
-              <li data-phase="ports"><span class="num">3</span>Portas</li>
-              <li data-phase="detect"><span class="num">4</span>SO e plataformas</li>
-            </ol>
-            <div class="scan-stats">
-              <div><span class="stat-label">Tempo total</span><span id="spTotal" class="stat-value">—</span></div>
-              <div><span class="stat-label">Tempo da fase</span><span id="spPhase" class="stat-value">—</span></div>
-              <div><span class="stat-label">Hosts encontrados</span><span id="spHosts" class="stat-value">0</span></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="card scan-manage">
-          <div>
-            <h3>Instalação do agente</h3>
-            <p class="muted">Baixe o agente e instale num host Linux autorizado da rede a inventariar.</p>
-            <a id="downloadAgent" class="ghost-btn" href="/ntm_agent.py" download="ntm_agent.py">⬇ Baixar agente</a>
-          </div>
-          <div>
-            <h3>Remover agente</h3>
-            <p class="muted">Remove o agente selecionado da plataforma. Os ativos já descobertos são mantidos.</p>
-            <button id="removeAgent" class="danger-btn" type="button">✕ Remover agente atual</button>
-          </div>
-        </div>
-      </section>
+      <div style="padding:4px 32px 40px;display:flex;flex-direction:column;gap:18px">
+        <div id="screen"></div>
+      </div>
     </main>
-  </div>
 
-  <div id="hostModal" class="modal hidden">
-    <div class="modal-box">
-      <button class="modal-close" id="modalClose">×</button>
-      <div id="modalContent"></div>
-    </div>
+    <div id="drawer"></div>
   </div>
 </body>
 </html>
