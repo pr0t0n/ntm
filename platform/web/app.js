@@ -99,15 +99,24 @@ function buildSubnets() {
     map[a.subnet].list.push(a);
   });
   SUBNETS = Object.values(map).sort((a, b) => b.list.length - a.list.length);
-  // layout positions for the map (a row of hubs + ring placement of hosts)
-  const n = SUBNETS.length || 1;
+  layoutMap();
+}
+
+let MAP_H = 600;
+// layoutMap arranges subnet hubs in a grid (so many /24s don't overlap) and
+// places each subnet's hosts in rings around its hub.
+function layoutMap() {
+  const n = SUBNETS.length || 1, W = 1240;
+  const cols = Math.max(1, Math.min(n, Math.floor(W / 230)));
+  const rows = Math.ceil(n / cols);
+  const colGap = W / (cols + 1), rowH = 210, topY = 180;
   SUBNETS.forEach((sn, i) => {
-    sn.x = n === 1 ? 620 : 200 + i * (840 / Math.max(1, n - 1));
-    sn.y = 440;
-    let idx = 0, ring = 0;
-    const list = sn.list;
+    const c = i % cols, r = Math.floor(i / cols);
+    sn.x = +(colGap * (c + 1)).toFixed(1);
+    sn.y = topY + r * rowH;
+    const list = sn.list; let idx = 0, ring = 0;
     while (idx < list.length) {
-      const rad = 42 + ring * 17, cap = Math.floor(2 * Math.PI * rad / 14.5);
+      const rad = 30 + ring * 15, cap = Math.max(1, Math.floor(2 * Math.PI * rad / 13));
       const cnt = Math.min(cap, list.length - idx);
       for (let k = 0; k < cnt; k++) {
         const ang = -Math.PI / 2 + (k / cnt) * 2 * Math.PI + ring * 0.3;
@@ -116,8 +125,9 @@ function buildSubnets() {
       }
       idx += cnt; ring++;
     }
-    sn.outer = 42 + (ring - 1) * 17;
+    sn.outer = 30 + Math.max(0, ring - 1) * 15;
   });
+  MAP_H = topY + (rows - 1) * rowH + 130;
 }
 
 // ---- helpers ----
@@ -378,12 +388,14 @@ function viewCmdb() {
 function viewDrawer() {
   const a = byId[state.drawer]; if (!a) return "";
   const disc = a.discDays != null ? new Date(Date.now() - a.discDays * 86400000).toLocaleDateString("pt-BR") : "—";
-  const portRows = a.ports.length ? a.ports.map(p => ({ k: `${p.port}/${p.protocol}`, v: `${p.service || ""}${p.product ? " · " + p.product : ""}${p.version ? " " + p.version : ""}` || "—" })) : [{ k: "Portas", v: "Nenhuma porta aberta" }];
+  const portRows = a.ports.length
+    ? a.ports.map(p => ({ k: `${p.port}/${p.protocol}`, v: [p.service, p.product, p.version].filter(Boolean).join(" ") || "aberta" }))
+    : [{ k: "Portas", v: "Nenhuma porta aberta" }];
   const groups = [
-    { title: "Sistema", rows: [{ k: "Sistema operacional", v: a.os }, { k: "Família", v: a.fam }, { k: "Ciclo de suporte", v: a.eol ? "Encerrado" : "Vigente" }, { k: "Fabricante / vendor", v: a.vendor }] },
-    { title: "Rede", rows: [{ k: "IP", v: a.ip }, { k: "MAC", v: a.mac || "—" }, { k: "Sub-rede", v: a.subnetName }, { k: "Gateway", v: a.ip.replace(/\d+$/, "1") }] },
+    { title: "Sistema", rows: [{ k: "Sistema operacional", v: a.os }, { k: "Família", v: a.fam }, { k: "Fabricante / vendor", v: a.vendor }] },
+    { title: "Rede", rows: [{ k: "IP", v: a.ip }, { k: "MAC", v: a.mac || "—" }, { k: "Sub-rede", v: a.subnetName }, { k: "Gateway", v: a.ip.replace(/\\d+$/, "1") }] },
     { title: `Portas / serviços (${a.ports.length})`, rows: portRows },
-    { title: "Gestão", rows: [{ k: "Status", v: a.status }, { k: "Criticidade", v: a.crit }, { k: "Descoberto em", v: disc }, { k: "Última vez visto", v: fmtSeen(a.seenMin) }] },
+    { title: "Descoberta", rows: [{ k: "Descoberto em", v: disc }, { k: "Última vez visto", v: fmtSeen(a.seenMin) }] },
   ];
   const rowStyle = "display:flex;justify-content:space-between;gap:14px;padding:7px 0;font-size:13px;background:linear-gradient(to right,transparent,color-mix(in srgb,var(--color-text) 8%,transparent) 48px,color-mix(in srgb,var(--color-text) 8%,transparent) calc(100% - 48px),transparent) no-repeat bottom/100% 1px";
   return `<div onclick="App.closeDrawer()" style="position:fixed;inset:0;background:color-mix(in srgb,var(--color-neutral-900) 55%,transparent);z-index:20"></div>
@@ -393,14 +405,14 @@ function viewDrawer() {
         <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500)">${esc(a.ci)}</span><span style="font-size:17px;font-weight:500">${esc(a.host)}</span><span style="font-size:12px;color:var(--color-neutral-500);font-family:ui-monospace,monospace">${esc(a.ip)}</span></div>
         <button class="btn btn-icon btn-ghost" onclick="App.closeDrawer()" style="width:30px;height:30px"><i class="ph ph-x"></i></button>
       </div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;padding:0 22px"><span style="font-size:11px;padding:3px 9px;border-radius:6px;color:${statusColor(a.status)};background:color-mix(in srgb,${statusColor(a.status)} 16%,transparent)">${esc(a.status)}</span><span class="tag tag-neutral">${esc(a.type)}</span><span class="tag tag-neutral">Criticidade&nbsp;${esc(a.crit)}</span>${a.eol ? `<span style="font-size:11px;padding:3px 9px;border-radius:6px;color:oklch(0.8 0.1 22);background:color-mix(in oklch,oklch(0.72 0.14 22) 18%,transparent)">SO sem suporte</span>` : ""}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;padding:0 22px"><span class="tag tag-neutral">${esc(a.type)}</span><span class="tag tag-neutral">${esc(a.fam)}</span>${a.portCount ? `<span class="tag tag-accent">${a.portCount} porta(s) aberta(s)</span>` : ""}</div>
       <div style="padding:18px 22px;display:flex;flex-direction:column;gap:18px">
         ${groups.map(g => `<div style="display:flex;flex-direction:column">
           <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500);margin-bottom:4px">${esc(g.title)}</div>
           ${g.rows.map(r => `<div style="${rowStyle}"><span style="color:var(--color-neutral-500)">${esc(r.k)}</span><span style="text-align:right">${esc(r.v)}</span></div>`).join("")}
         </div>`).join("")}
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-primary" onclick='App.go("map",{"mapSel":${JSON.stringify(a.id)},"focus":${JSON.stringify(a.subnet)}})'><i class="ph ph-graph"></i>Ver no mapa</button>
+          <button class="btn btn-primary" onclick='App.go("map",{"mapSel":${'${JSON.stringify(a.id)}'},"focus":${'${JSON.stringify(a.subnet)}'}})'><i class="ph ph-graph"></i>Ver no mapa</button>
           <button class="btn btn-secondary" onclick="App.rescan('${a.id}')"><i class="ph ph-arrows-clockwise"></i>Revarrer host</button>
         </div>
       </div>
@@ -411,52 +423,44 @@ function viewDrawer() {
 function viewMap() {
   const s = state;
   const typeC = { "Servidores": "var(--color-accent-400)", "Endpoints": "var(--color-neutral-300)", "Rede": "var(--color-accent-200)", "IoT / periféricos": "var(--color-neutral-600)" };
-  const colorOf = a => s.colorBy === "tipo" ? typeC[a.cat] : s.colorBy === "status" ? statusColor(a.status) : (a.eol ? CRIT : (FAM_COLOR[a.fam] || "var(--color-neutral-500)"));
-  const legend = s.colorBy === "tipo" ? Object.entries(typeC) : s.colorBy === "status" ? [["Gerenciado", statusColor("Gerenciado")], ["Não gerenciado", CRIT], ["Novo", WARN]] : [...Object.entries(FAM_COLOR), ["Sem suporte", CRIT]];
-  const match = a => s.hl === "none" ? true : s.hl === "unman" ? a.status === "Não gerenciado" : s.hl === "eol" ? a.eol : a.status === "Novo";
+  const colorOf = a => s.colorBy === "tipo" ? (typeC[a.cat] || "var(--color-neutral-500)") : (FAM_COLOR[a.fam] || "var(--color-neutral-500)");
+  const legend = s.colorBy === "tipo" ? Object.entries(typeC) : Object.entries(FAM_COLOR);
   const q = s.search.trim().toLowerCase();
   const qm = a => !q || (a.host + a.ip + a.mac + a.os).toLowerCase().includes(q);
-  const core = { x: 620, y: 150 };
+  const match = a => s.hl === "ports" ? a.portCount > 0 : true;
+  const core = { x: 620, y: 70 };
   const nodes = ASSETS.filter(a => a.x != null).map(a => {
-    const hit = match(a) && qm(a), sel = s.mapSel === a.id, r = a.cat === "Rede" ? 5.5 : a.cat === "Servidores" ? 4.8 : 4;
-    return { id: a.id, x: a.x, y: a.y, r, halo: r + 4, selOp: sel ? 1 : 0, color: colorOf(a), op: hit || sel ? 1 : 0.14 };
+    const hit = match(a) && qm(a), sel = s.mapSel === a.id, r = a.cat === "Rede" ? 5 : a.cat === "Servidores" ? 4.5 : 3.8;
+    return { id: a.id, x: a.x, y: a.y, r, halo: r + 4, sel, color: colorOf(a), op: hit || sel ? 1 : 0.13 };
   });
-  const spokes = s.links ? ASSETS.filter(a => a.x != null).map(a => { const sn = SUBNETS.find(x => x.id === a.subnet); return { x1: sn.x, y1: sn.y, x2: a.x, y2: a.y, op: match(a) && qm(a) ? 0.55 : 0.12 }; }) : [];
-  const edges = SUBNETS.map(sn => ({ x1: core.x, y1: core.y, x2: sn.x, y2: sn.y, dash: "none" }));
-  const foc = s.focus ? SUBNETS.find(x => x.id === s.focus) : null;
-  const k = 0.72;
-  const transform = foc ? `translate(${620 - foc.x * 2.1}px,${300 - foc.y * 2.1}px) scale(2.1)` : "translate(0px,0px) scale(1)";
+  const spokes = s.links ? ASSETS.filter(a => a.x != null).map(a => { const sn = SUBNETS.find(x => x.id === a.subnet); return { x1: sn.x, y1: sn.y, x2: a.x, y2: a.y, op: match(a) && qm(a) ? 0.4 : 0.07 }; }) : [];
+  const edges = SUBNETS.map(sn => ({ x1: core.x, y1: core.y, x2: sn.x, y2: sn.y }));
   const selA = s.mapSel && byId[s.mapSel];
-  const infra = [{ x: core.x, y: core.y, r: 19, glow: 30, short: "CORE", stroke: "var(--color-accent)" },
-    ...SUBNETS.map(sn => ({ x: sn.x, y: sn.y, r: 15, glow: 22, short: sn.id, name: sn.name, cidr: sn.cidr, stroke: s.focus === sn.id ? "var(--color-accent-200)" : "var(--color-accent-500)", ly: sn.y + sn.outer + 28 }))];
-  const labels = [];
-  infra.forEach(h => {
-    labels.push({ x: h.x, y: h.y, t: h.short.length > 10 ? h.short : h.short, fs: 10, fw: 600, c: "var(--color-accent-200)", bg: "transparent" });
-    if (h.name) labels.push({ x: h.x, y: (h.ly || h.y + 30) - 6, t: h.name, fs: 12, fw: 500, c: "var(--color-text)", bg: "transparent" });
-    if (h.cidr) labels.push({ x: h.x, y: (h.ly || h.y + 30) + 10, t: h.cidr, fs: 11, fw: 400, c: "var(--color-neutral-400)", bg: "transparent" });
-  });
+  const foc = s.focus ? SUBNETS.find(x => x.id === s.focus) : null;
 
-  const asideHtml = selA ? (() => {
-    const rows = [{ k: "Sistema operacional", v: selA.os, c: selA.eol ? "oklch(0.8 0.1 22)" : "var(--color-text)" }, { k: "Fabricante / vendor", v: selA.vendor, c: "var(--color-text)" }, { k: "Sub-rede", v: selA.subnetName, c: "var(--color-text)" }, { k: "MAC", v: selA.mac || "—", c: "var(--color-text)" }, { k: "Status", v: selA.status, c: "var(--color-text)" }, { k: "Visto", v: fmtSeen(selA.seenMin), c: "var(--color-text)" }];
-    return `<div style="display:flex;flex-direction:column;gap:12px">
+  let aside;
+  if (selA) {
+    const rows = [["Sistema operacional", selA.os], ["Fabricante / vendor", selA.vendor], ["Sub-rede", selA.subnetName], ["MAC", selA.mac || "—"], ["Portas abertas", selA.portCount], ["Visto", fmtSeen(selA.seenMin)]];
+    aside = `<div style="display:flex;flex-direction:column;gap:12px">
       <div style="display:flex;align-items:center;gap:10px">
         <div style="width:36px;height:36px;border-radius:var(--radius-md);display:grid;place-items:center;background:var(--color-bg);color:var(--color-accent-400)"><i class="ph ${selA.icon}" style="font-size:19px"></i></div>
         <div style="flex:1;min-width:0;display:flex;flex-direction:column"><span style="font-size:15px;font-weight:500">${esc(selA.host)}</span><span style="font-size:12px;color:var(--color-neutral-500);font-family:ui-monospace,monospace">${esc(selA.ip)}</span></div>
         <button class="btn btn-icon btn-ghost" onclick="App.clearSel()" style="width:30px;height:30px"><i class="ph ph-x"></i></button>
       </div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap"><span style="font-size:11px;padding:3px 9px;border-radius:6px;color:${statusColor(selA.status)};background:color-mix(in srgb,${statusColor(selA.status)} 16%,transparent)">${esc(selA.status)}</span><span class="tag tag-neutral">${esc(selA.type)}</span><span class="tag tag-neutral">Criticidade&nbsp;${esc(selA.crit)}</span></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap"><span class="tag tag-neutral">${esc(selA.type)}</span><span class="tag tag-neutral">${esc(selA.fam)}</span></div>
       <div style="display:flex;flex-direction:column">
-        ${rows.map(r => `<div style="display:flex;justify-content:space-between;gap:12px;padding:7px 0;font-size:12.5px;background:linear-gradient(to right,transparent,color-mix(in srgb,var(--color-text) 8%,transparent) 48px,color-mix(in srgb,var(--color-text) 8%,transparent) calc(100% - 48px),transparent) no-repeat bottom/100% 1px"><span style="color:var(--color-neutral-500)">${esc(r.k)}</span><span style="text-align:right;color:${r.c}">${esc(r.v)}</span></div>`).join("")}
+        ${rows.map(([k, v]) => `<div style="display:flex;justify-content:space-between;gap:12px;padding:7px 0;font-size:12.5px;background:linear-gradient(to right,transparent,color-mix(in srgb,var(--color-text) 8%,transparent) 48px,color-mix(in srgb,var(--color-text) 8%,transparent) calc(100% - 48px),transparent) no-repeat bottom/100% 1px"><span style="color:var(--color-neutral-500)">${esc(k)}</span><span style="text-align:right">${esc(v)}</span></div>`).join("")}
       </div>
       <button class="btn btn-primary" onclick="App.openDrawer('${selA.id}')"><i class="ph ph-database"></i>Abrir item no CMDB</button>
     </div>`;
-  })() : foc ? (() => {
+  } else if (foc) {
     const l = foc.list, tC = {}; l.forEach(a => tC[a.type] = (tC[a.type] || 0) + 1);
-    const stats = [{ k: "Ativos", v: l.length, c: "var(--color-text)" }, { k: "Não gerenc.", v: l.filter(a => a.status === "Não gerenciado").length, c: CRIT }, { k: "Sem suporte", v: l.filter(a => a.eol).length, c: CRIT }];
-    return `<div style="display:flex;flex-direction:column;gap:12px">
+    const ports = l.reduce((n, a) => n + a.portCount, 0); const svc = new Set(); l.forEach(a => a.ports.forEach(p => svc.add(p.service || p.product || p.port)));
+    const stats = [["Ativos", l.length], ["Portas", ports], ["Serviços", svc.size]];
+    aside = `<div style="display:flex;flex-direction:column;gap:12px">
       <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-accent)">Sub-rede</span><span style="font-size:17px;font-weight:500">${esc(foc.name)}</span><span style="font-size:12px;color:var(--color-neutral-500);font-family:ui-monospace,monospace">${esc(foc.cidr)}</span></div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-        ${stats.map(st => `<div style="padding:10px;border-radius:var(--radius-md);background:var(--color-bg);display:flex;flex-direction:column;gap:2px"><span style="font-size:19px;font-weight:500;color:${st.c}">${st.v}</span><span style="font-size:11px;color:var(--color-neutral-500)">${esc(st.k)}</span></div>`).join("")}
+        ${stats.map(([k, v]) => `<div style="padding:10px;border-radius:var(--radius-md);background:var(--color-bg);display:flex;flex-direction:column;gap:2px"><span style="font-size:19px;font-weight:500">${v}</span><span style="font-size:11px;color:var(--color-neutral-500)">${esc(k)}</span></div>`).join("")}
       </div>
       <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500)">Composição</div>
       <div style="display:flex;flex-direction:column;gap:6px">
@@ -464,55 +468,57 @@ function viewMap() {
       </div>
       <button class="btn btn-secondary" onclick='App.filterTo({"fSubnet":${JSON.stringify(foc.name)}})'><i class="ph ph-list-bullets"></i>Listar ativos da sub-rede</button>
     </div>`;
-  })() : `<div style="display:flex;flex-direction:column;gap:12px">
-      <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:15px;font-weight:500">Topologia descoberta</span><span style="font-size:12.5px;color:var(--color-neutral-500);text-wrap:pretty">${ASSETS.length} ativos em ${SUBNETS.length} sub-rede(s) descobertas pelo coletor.</span></div>
-      <div style="display:flex;flex-direction:column">
-        ${SUBNETS.map(sn => { const risk = sn.list.filter(a => a.eol || a.status === "Não gerenciado").length; return `<button onclick='App.go("map",{"focus":${JSON.stringify(sn.id)}})' style="display:flex;align-items:center;gap:10px;padding:10px 4px;border:0;background:linear-gradient(to right,transparent,color-mix(in srgb,var(--color-text) 8%,transparent) 48px,color-mix(in srgb,var(--color-text) 8%,transparent) calc(100% - 48px),transparent) no-repeat bottom/100% 1px;color:var(--color-text);font:inherit;cursor:pointer;text-align:left">
-          <div style="flex:1;display:flex;flex-direction:column"><span style="font-size:13px">${esc(sn.name)}</span><span style="font-size:11.5px;color:var(--color-neutral-500);font-family:ui-monospace,monospace">${esc(sn.cidr)}</span></div>
-          <span style="font-size:13px">${sn.list.length}</span>${risk > 0 ? `<span style="font-size:11px;color:oklch(0.78 0.12 22)">${risk} ⚠</span>` : ""}<i class="ph ph-caret-right" style="color:var(--color-neutral-500)"></i>
+  } else {
+    aside = `<div style="display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:15px;font-weight:500">Topologia descoberta</span><span style="font-size:12.5px;color:var(--color-neutral-500);text-wrap:pretty">${ASSETS.length} ativos em ${SUBNETS.length} sub-rede(s). Clique numa sub-rede para ver os detalhes.</span></div>
+      <div style="display:flex;flex-direction:column;max-height:60vh;overflow-y:auto">
+        ${SUBNETS.map(sn => { const ports = sn.list.reduce((n, a) => n + a.portCount, 0); return `<button onclick='App.focusSubnet(${JSON.stringify(sn.id)})' style="display:flex;align-items:center;gap:10px;padding:10px 4px;border:0;background:linear-gradient(to right,transparent,color-mix(in srgb,var(--color-text) 8%,transparent) 48px,color-mix(in srgb,var(--color-text) 8%,transparent) calc(100% - 48px),transparent) no-repeat bottom/100% 1px;color:var(--color-text);font:inherit;cursor:pointer;text-align:left">
+          <div style="flex:1;display:flex;flex-direction:column"><span style="font-size:13px;font-family:ui-monospace,monospace">${esc(sn.cidr)}</span><span style="font-size:11.5px;color:var(--color-neutral-500)">${sn.list.length} ativo(s) · ${ports} porta(s)</span></div>
+          <i class="ph ph-caret-right" style="color:var(--color-neutral-500)"></i>
         </button>`; }).join("")}
       </div>
     </div>`;
+  }
 
   return `<div style="display:flex;flex-direction:column;gap:14px">
     <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px">
       <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--color-neutral-500)">Colorir por
-        <div style="display:inline-flex;border:1px solid var(--color-divider);border-radius:var(--radius-md);overflow:hidden">${seg([{ l: "Tipo", v: "tipo" }, { l: "Status", v: "status" }, { l: "SO", v: "so" }], s.colorBy, "setColorBy")}</div>
+        <div style="display:inline-flex;border:1px solid var(--color-divider);border-radius:var(--radius-md);overflow:hidden">${seg([{ l: "Tipo", v: "tipo" }, { l: "SO", v: "so" }], s.colorBy, "setColorBy")}</div>
       </div>
       <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--color-neutral-500)">Destacar
-        <div style="display:inline-flex;border:1px solid var(--color-divider);border-radius:var(--radius-md);overflow:hidden">${seg([{ l: "Nada", v: "none" }, { l: "Não gerenciados", v: "unman" }, { l: "SO sem suporte", v: "eol" }, { l: "Novos", v: "new" }], s.hl, "setHl")}</div>
+        <div style="display:inline-flex;border:1px solid var(--color-divider);border-radius:var(--radius-md);overflow:hidden">${seg([{ l: "Nada", v: "none" }, { l: "Com portas abertas", v: "ports" }], s.hl, "setHl")}</div>
       </div>
       <button class="btn btn-secondary" onclick="App.toggleLinks()" style="font-size:12.5px"><i class="ph ${s.links ? "ph-eye" : "ph-eye-slash"}"></i>Ligações</button>
-      ${foc ? `<button class="btn btn-secondary" onclick="App.clearFocus()" style="font-size:12.5px"><i class="ph ph-arrows-out"></i>Visão geral</button>` : ""}
+      ${foc || selA ? `<button class="btn btn-secondary" onclick="App.clearFocus()" style="font-size:12.5px"><i class="ph ph-arrows-out"></i>Visão geral</button>` : ""}
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start">
-      <div style="position:relative;flex:999 1 620px;min-width:min(100%,620px);border-radius:var(--radius-md);background:radial-gradient(ellipse at 50% 30%,color-mix(in srgb,var(--color-accent) 7%,var(--color-surface)),var(--color-bg) 75%);box-shadow:var(--shadow-sm);overflow:hidden">
-        <div style="position:relative;width:100%;height:${Math.round(600 * k)}px;overflow:hidden">
-          <div style="position:absolute;left:0;top:0;width:1240px;height:600px;transform-origin:0 0;transform:scale(${k})">
-            <div style="position:absolute;inset:0;transform-origin:0 0;transform:${transform};transition:transform .6s cubic-bezier(.3,.7,.2,1)">
-              <svg viewBox="0 0 1240 600" style="position:absolute;inset:0;width:1240px;height:600px;display:block;overflow:visible">
-                <rect x="0" y="0" width="1240" height="600" onclick="App.clearSel()" style="fill:transparent"></rect>
-                ${spokes.map(e => `<line x1="${e.x1}" y1="${e.y1}" x2="${e.x2}" y2="${e.y2}" style="stroke:var(--color-neutral-700);stroke-width:.6;opacity:${e.op}"></line>`).join("")}
-                ${edges.map(e => `<line x1="${e.x1}" y1="${e.y1}" x2="${e.x2}" y2="${e.y2}" style="stroke:var(--color-accent-500);stroke-width:1.6;opacity:.75"></line>`).join("")}
-                ${nodes.map(n => `<g onclick="App.selNode('${n.id}')" style="cursor:pointer;opacity:${n.op}">
-                  <circle cx="${n.x}" cy="${n.y}" r="${n.halo}" style="fill:none;stroke:var(--color-accent-200);stroke-width:1.5;opacity:${n.selOp}"></circle>
-                  <circle cx="${n.x}" cy="${n.y}" r="${n.r}" style="fill:${n.color};stroke:var(--color-bg);stroke-width:1"></circle>
-                </g>`).join("")}
-                ${infra.map(h => `<g onclick="${h.short === "CORE" ? "App.clearFocus()" : `App.focusSubnet('${h.short}')`}" style="cursor:pointer">
-                  <circle cx="${h.x}" cy="${h.y}" r="${h.glow}" style="fill:color-mix(in srgb,var(--color-accent) 14%,transparent)"></circle>
-                  <circle cx="${h.x}" cy="${h.y}" r="${h.r}" style="fill:var(--color-surface);stroke:${h.stroke};stroke-width:1.5"></circle>
-                </g>`).join("")}
-              </svg>
-              ${labels.map(l => `<div style="position:absolute;left:${l.x}px;top:${l.y}px;transform:translate(-50%,-50%);white-space:nowrap;pointer-events:none;font-size:${l.fs}px;font-weight:${l.fw};color:${l.c};line-height:1;padding:1px 4px;border-radius:4px;background:${l.bg}">${esc(l.t)}</div>`).join("")}
-            </div>
-          </div>
-        </div>
+      <div style="flex:999 1 620px;min-width:min(100%,560px);border-radius:var(--radius-md);background:radial-gradient(ellipse at 50% 20%,color-mix(in srgb,var(--color-accent) 7%,var(--color-surface)),var(--color-bg) 75%);box-shadow:var(--shadow-sm);overflow:hidden">
+        <svg viewBox="0 0 1240 ${MAP_H}" preserveAspectRatio="xMidYMid meet" style="width:100%;height:auto;max-height:74vh;display:block">
+          <rect x="0" y="0" width="1240" height="${MAP_H}" onclick="App.clearSel()" style="fill:transparent"></rect>
+          ${spokes.map(e => `<line x1="${e.x1}" y1="${e.y1}" x2="${e.x2}" y2="${e.y2}" style="stroke:var(--color-neutral-700);stroke-width:.7;opacity:${e.op}"></line>`).join("")}
+          ${edges.map(e => `<line x1="${e.x1}" y1="${e.y1}" x2="${e.x2}" y2="${e.y2}" style="stroke:var(--color-accent-500);stroke-width:1.4;opacity:.6"></line>`).join("")}
+          ${nodes.map(n => `<g onclick="App.selNode('${n.id}')" style="cursor:pointer;opacity:${n.op}">
+            ${n.sel ? `<circle cx="${n.x}" cy="${n.y}" r="${n.halo}" style="fill:none;stroke:var(--color-accent-200);stroke-width:1.5"></circle>` : ""}
+            <circle cx="${n.x}" cy="${n.y}" r="${n.r}" style="fill:${n.color};stroke:var(--color-bg);stroke-width:1"></circle>
+          </g>`).join("")}
+          <g onclick="App.clearFocus()" style="cursor:pointer">
+            <circle cx="${core.x}" cy="${core.y}" r="30" style="fill:color-mix(in srgb,var(--color-accent) 14%,transparent)"></circle>
+            <circle cx="${core.x}" cy="${core.y}" r="19" style="fill:var(--color-surface);stroke:var(--color-accent);stroke-width:1.5"></circle>
+            <text x="${core.x}" y="${core.y + 4}" text-anchor="middle" style="fill:var(--color-accent-200);font-size:11px;font-weight:600;font-family:var(--font-body)">CORE</text>
+          </g>
+          ${SUBNETS.map(sn => `<g onclick='App.focusSubnet(${JSON.stringify(sn.id)})' style="cursor:pointer">
+            <circle cx="${sn.x}" cy="${sn.y}" r="22" style="fill:color-mix(in srgb,var(--color-accent) 14%,transparent)"></circle>
+            <circle cx="${sn.x}" cy="${sn.y}" r="14" style="fill:var(--color-surface);stroke:${s.focus === sn.id ? "var(--color-accent-200)" : "var(--color-accent-500)"};stroke-width:1.5"></circle>
+            <text x="${sn.x}" y="${sn.y + sn.outer + 20}" text-anchor="middle" style="fill:var(--color-neutral-300);font-size:13px;font-family:ui-monospace,monospace">${esc(sn.cidr)}</text>
+            <text x="${sn.x}" y="${sn.y + sn.outer + 36}" text-anchor="middle" style="fill:var(--color-neutral-600);font-size:11px;font-family:var(--font-body)">${sn.list.length} ativos</text>
+          </g>`).join("")}
+        </svg>
         <div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px 14px;padding:10px 14px;background:linear-gradient(to right,transparent,var(--color-divider) 48px,var(--color-divider) calc(100% - 48px),transparent) no-repeat top/100% 1px">
           ${legend.map(([label, color]) => `<span style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--color-neutral-300)"><span style="width:8px;height:8px;border-radius:50%;background:${color}"></span>${esc(label)}</span>`).join("")}
-          <span style="margin-left:auto;font-size:11.5px;color:var(--color-neutral-500)">${foc ? "Clique no core para voltar" : "Clique em uma sub-rede para aproximar"}</span>
+          <span style="margin-left:auto;font-size:11.5px;color:var(--color-neutral-500)">Clique numa sub-rede ou num ativo</span>
         </div>
       </div>
-      <aside style="flex:1 1 300px;min-width:280px;border-radius:var(--radius-md);background:var(--color-surface);box-shadow:var(--shadow-sm);padding:16px 18px;display:flex;flex-direction:column;gap:12px">${asideHtml}</aside>
+      <aside style="flex:1 1 300px;min-width:280px;border-radius:var(--radius-md);background:var(--color-surface);box-shadow:var(--shadow-sm);padding:16px 18px;display:flex;flex-direction:column;gap:12px">${aside}</aside>
     </div>
   </div>`;
 }
