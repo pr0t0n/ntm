@@ -40,6 +40,9 @@ type Host struct {
 	AgentID   int64     `json:"agent_id"`
 	FirstSeen time.Time `json:"first_seen"`
 	LastSeen  time.Time `json:"last_seen"`
+	Owner     string    `json:"owner"`
+	Tags      []string  `json:"tags"`
+	Notes     string    `json:"notes"`
 	Ports     []Port    `json:"ports,omitempty"`
 }
 

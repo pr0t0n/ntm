@@ -46,6 +46,7 @@ func (s *Server) Routes(web http.Handler) http.Handler {
 	mux.HandleFunc("GET /api/v1/dashboard", s.handleDashboard)
 	mux.HandleFunc("GET /api/v1/hosts", s.handleHosts)
 	mux.HandleFunc("GET /api/v1/hosts/{id}", s.handleHost)
+	mux.HandleFunc("POST /api/v1/hosts/{id}/annotations", s.handleAnnotate)
 	mux.HandleFunc("GET /api/v1/network-map", s.handleMap)
 	mux.HandleFunc("GET /api/v1/changes", s.handleChanges)
 	mux.HandleFunc("POST /api/v1/reset", s.handleReset)
@@ -339,6 +340,31 @@ func suggestRange(ip string) string {
 	}
 	v4 := p.To4()
 	return fmt.Sprintf("%d.%d.%d.0/24", v4[0], v4[1], v4[2])
+}
+
+func (s *Server) handleAnnotate(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, "bad id")
+		return
+	}
+	var body struct {
+		Owner string   `json:"owner"`
+		Tags  []string `json:"tags"`
+		Notes string   `json:"notes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if err := s.store.UpdateHostAnnotations(r.Context(), id, strings.TrimSpace(body.Owner), body.Tags, strings.TrimSpace(body.Notes)); errors.Is(err, db.ErrNotFound) {
+		httpError(w, http.StatusNotFound, "not found")
+		return
+	} else if err != nil {
+		httpError(w, http.StatusInternalServerError, "could not save")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // --- Frontend endpoints ---

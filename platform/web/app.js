@@ -24,7 +24,7 @@ const FAM_COLOR = {
 const state = {
   screen: localStorage.getItem("atlas.screen") || "dash",
   search: "", fType: "Todos", fFam: "Todas", fSubnet: "Todas", fStatus: "Todos",
-  fEol: false, stale: false, limit: 40, drawer: null,
+  fEol: false, stale: false, fTag: "Todas", limit: 40, drawer: null,
   mapSel: null, focus: null, colorBy: "tipo", hl: "none", links: true, mapView: null, installToken: null,
   scanName: "Varredura ad-hoc", agentId: null, range: "",
 };
@@ -93,7 +93,8 @@ async function loadAssets() {
       id: String(h.id), ci: "CI" + h.id, host: h.hostname || h.ip, hostname: h.hostname || "", ip: h.ip, mac: h.mac || "",
       type, icon: ICON[type], os: os || "Desconhecido", fam: famFromOs(os), cat: catFromType(type),
       eol: isEol(os), subnet: prefix, subnetName: prefix + ".0/24", status, discDays, seenMin,
-      crit: critFromType(type), owner: "—", user: "—", vendor: h.vendor || app || "—",
+      crit: critFromType(type), owner: h.owner || "", user: "—", vendor: h.vendor || app || "—",
+      tags: h.tags || [], notes: h.notes || "",
       cpu: "—", ports, portCount: ports.length, hostUp: h.status !== "down", app,
     };
   });
@@ -375,7 +376,8 @@ function filtered() {
     (s.fType === "Todos" || a.type === s.fType) &&
     (s.fFam === "Todas" || a.fam === s.fFam) &&
     (s.fSubnet === "Todas" || a.subnetName === s.fSubnet) &&
-    (!q || (a.host + " " + a.ip + " " + a.mac + " " + a.os + " " + a.vendor + " " +
+    (s.fTag === "Todas" || (a.tags || []).includes(s.fTag)) &&
+    (!q || (a.host + " " + a.ip + " " + a.mac + " " + a.os + " " + a.vendor + " " + a.owner + " " + (a.tags || []).join(" ") + " " +
             a.ports.map(p => p.port + " " + (p.service || "") + " " + (p.product || "")).join(" ")).toLowerCase().includes(q)));
 }
 
@@ -384,7 +386,8 @@ function viewCmdb() {
   const rows = l.slice(0, s.limit);
   const withPorts = l.filter(a => a.portCount > 0).length;
   const totalPorts = l.reduce((n, a) => n + a.portCount, 0);
-  const hasFilters = s.fType !== "Todos" || s.fFam !== "Todas" || s.fSubnet !== "Todas" || !!s.search;
+  const hasFilters = s.fType !== "Todos" || s.fFam !== "Todas" || s.fSubnet !== "Todas" || s.fTag !== "Todas" || !!s.search;
+  const allTags = [...new Set(ASSETS.flatMap(a => a.tags || []))].sort();
   const typeOpts = ["Todos", ...Object.keys(ICON)];
   const famOpts = ["Todas", "Windows", "Linux", "macOS", "Rede / appliance", "Embarcado / desconhecido"];
   const subOpts = ["Todas", ...SUBNETS.map(x => x.name)];
@@ -400,6 +403,7 @@ function viewCmdb() {
       <div class="field" style="width:170px"><label>Tipo</label><select class="input" onchange="App.setFilter('fType',this.value)">${opt(typeOpts, s.fType)}</select></div>
       <div class="field" style="width:200px"><label>Família de SO</label><select class="input" onchange="App.setFilter('fFam',this.value)">${opt(famOpts, s.fFam)}</select></div>
       <div class="field" style="width:200px"><label>Sub-rede</label><select class="input" onchange="App.setFilter('fSubnet',this.value)">${opt(subOpts, s.fSubnet)}</select></div>
+      ${allTags.length ? `<div class="field" style="width:170px"><label>Tag</label><select class="input" onchange="App.setFilter('fTag',this.value)">${opt(["Todas", ...allTags], s.fTag)}</select></div>` : ""}
       <div style="margin-left:auto;display:flex;gap:8px">
         ${hasFilters ? `<button class="btn btn-ghost" onclick="App.clearFilters()" style="font-size:12.5px;height:36px">Limpar filtros</button>` : ""}
         <button class="btn btn-secondary" onclick="App.exportCsv()" style="height:36px"><i class="ph ph-download-simple"></i>Exportar CSV</button>
@@ -415,7 +419,7 @@ function viewCmdb() {
         <tbody>
           ${rows.map(r => `<tr onclick="App.openDrawer('${r.id}')" style="cursor:pointer">
             <td><span style="font-weight:500;font-family:ui-monospace,monospace">${esc(r.ip)}</span></td>
-            <td>${r.hostname ? esc(r.hostname) : `<span style="color:var(--color-neutral-600)">—</span>`}</td>
+            <td><div style="display:flex;flex-direction:column;gap:3px">${r.hostname ? esc(r.hostname) : `<span style="color:var(--color-neutral-600)">—</span>`}${(r.tags && r.tags.length) ? `<div style="display:flex;gap:3px;flex-wrap:wrap">${r.tags.map(t => `<span style="font-size:10px;padding:1px 6px;border-radius:5px;background:var(--color-accent-900);color:var(--color-accent-200)">${esc(t)}</span>`).join("")}</div>` : ""}</div></td>
             <td><span style="display:flex;align-items:center;gap:7px;color:var(--color-neutral-300)"><i class="ph ${r.icon}" style="color:var(--color-accent-400)"></i>${esc(r.type)}</span></td>
             <td>${esc(r.os)}</td>
             <td style="color:var(--color-neutral-300)">${esc(r.subnetName)}</td>
@@ -462,6 +466,13 @@ function viewDrawer() {
           <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500);margin-bottom:4px">Histórico</div>
           ${hist.map(c => { const k = CHANGE_KIND[c.kind] || { icon: "ph-dot", tone: "var(--color-neutral-400)" }; return `<div style="display:flex;gap:10px;align-items:flex-start;padding:6px 0;font-size:12.5px"><i class="ph ${k.icon}" style="color:${k.tone};margin-top:2px"></i><div style="flex:1;display:flex;flex-direction:column"><span>${esc(c.detail)}</span><span style="font-size:11px;color:var(--color-neutral-500)">${new Date(c.ts).toLocaleString("pt-BR")}</span></div></div>`; }).join("")}
         </div>` : ""}
+        <div style="display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--color-divider);padding-top:14px">
+          <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--color-neutral-500)">Anotações</div>
+          <div class="field"><label>Dono / responsável</label><input id="drawerOwner" class="input" value="${esc(a.owner)}" placeholder="ex: Infraestrutura"></div>
+          <div class="field"><label>Tags (separadas por vírgula)</label><input id="drawerTags" class="input" value="${esc((a.tags || []).join(", "))}" placeholder="ex: crítico, dmz, produção"></div>
+          <div class="field"><label>Notas</label><textarea id="drawerNotes" class="input" style="min-height:70px;resize:vertical" placeholder="Observações sobre o ativo">${esc(a.notes)}</textarea></div>
+          <button class="btn btn-secondary" style="align-self:flex-start" onclick="App.saveAnnotations('${a.id}')"><i class="ph ph-floppy-disk"></i>Salvar anotações</button>
+        </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-primary" onclick="App.go('map',{mapSel:'${a.id}',focus:'${esc(a.subnet)}'})"><i class="ph ph-graph"></i>Ver no mapa</button>
           <button class="btn btn-secondary" onclick="App.rescan('${a.id}')"><i class="ph ph-arrows-clockwise"></i>Revarrer host</button>
@@ -746,7 +757,7 @@ const App = {
   setHl(v) { state.hl = v; render(); },
   toggleEol() { state.fEol = !state.fEol; state.limit = 40; render(); },
   toggleLinks() { state.links = !state.links; render(); },
-  clearFilters() { Object.assign(state, { search: "", fType: "Todos", fFam: "Todas", fSubnet: "Todas", fStatus: "Todos", fEol: false, stale: false }); render(); },
+  clearFilters() { Object.assign(state, { search: "", fType: "Todos", fFam: "Todas", fSubnet: "Todas", fStatus: "Todos", fEol: false, stale: false, fTag: "Todas" }); render(); },
   clearFocus() { state.focus = null; state.mapSel = null; state.mapView = null; render(); },
   clearSel() { state.mapSel = null; render(); },
   selNode(id) { state.mapSel = id; render(); },
@@ -756,6 +767,16 @@ const App = {
   showMore() { state.limit += 40; render(); },
   openDrawer(id) { state.drawer = id; render(); },
   closeDrawer() { state.drawer = null; render(); },
+  async saveAnnotations(id) {
+    const owner = document.getElementById("drawerOwner").value.trim();
+    const tags = document.getElementById("drawerTags").value.split(",").map(t => t.trim()).filter(Boolean);
+    const notes = document.getElementById("drawerNotes").value.trim();
+    try {
+      const r = await fetch(`${API}/hosts/${id}/annotations`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ owner, tags, notes }) });
+      if (!r.ok) throw new Error(await r.text());
+      await refresh();
+    } catch (e) { console.error(e); alert("Falha ao salvar anotações."); }
+  },
   async newInstall() {
     try { const r = await fetch(`${API}/install-tokens`, { method: "POST" }); const d = await r.json(); state.installToken = d.install_token || null; } catch (e) { console.error(e); alert("Falha ao gerar instalação."); return; }
     state.screen = "scan"; render();

@@ -77,7 +77,10 @@ func (s *Store) migrate(ctx context.Context) error {
 		    detail  TEXT NOT NULL DEFAULT ''
 		);
 		CREATE INDEX IF NOT EXISTS idx_changes_ts ON changes (ts DESC);
-		CREATE INDEX IF NOT EXISTS idx_changes_ip ON changes (host_ip);`)
+		CREATE INDEX IF NOT EXISTS idx_changes_ip ON changes (host_ip);
+		ALTER TABLE hosts ADD COLUMN IF NOT EXISTS owner TEXT NOT NULL DEFAULT '';
+		ALTER TABLE hosts ADD COLUMN IF NOT EXISTS tags  TEXT[] NOT NULL DEFAULT '{}';
+		ALTER TABLE hosts ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT '';`)
 	return err
 }
 
@@ -672,7 +675,7 @@ func (s *Store) SearchHosts(ctx context.Context, field, q string) ([]models.Host
 
 	rows, err := s.pool.Query(ctx,
 		`SELECT h.id,h.ip,h.hostname,h.status,h.mac,h.vendor,h.os_guess,h.asset_type,
-		        COALESCE(h.agent_id,0),h.first_seen,h.last_seen
+		        COALESCE(h.agent_id,0),h.first_seen,h.last_seen,h.owner,h.tags,h.notes
 		 FROM hosts h WHERE `+where+` ORDER BY h.ip LIMIT 1000`, args...)
 	if err != nil {
 		return nil, err
@@ -683,7 +686,8 @@ func (s *Store) SearchHosts(ctx context.Context, field, q string) ([]models.Host
 	for rows.Next() {
 		var h models.Host
 		if err := rows.Scan(&h.ID, &h.IP, &h.Hostname, &h.Status, &h.MAC, &h.Vendor,
-			&h.OSGuess, &h.AssetType, &h.AgentID, &h.FirstSeen, &h.LastSeen); err != nil {
+			&h.OSGuess, &h.AssetType, &h.AgentID, &h.FirstSeen, &h.LastSeen,
+			&h.Owner, &h.Tags, &h.Notes); err != nil {
 			return nil, err
 		}
 		hosts = append(hosts, h)
@@ -724,14 +728,33 @@ func (s *Store) attachPorts(ctx context.Context, hosts []models.Host) ([]models.
 	return hosts, rows.Err()
 }
 
+// UpdateHostAnnotations saves the manual CMDB fields (owner, tags, notes).
+func (s *Store) UpdateHostAnnotations(ctx context.Context, id int64, owner string, tags []string, notes string) error {
+	if tags == nil {
+		tags = []string{}
+	}
+	var ip string
+	err := s.pool.QueryRow(ctx,
+		`UPDATE hosts SET owner=$2, tags=$3, notes=$4 WHERE id=$1 RETURNING ip`,
+		id, owner, tags, notes).Scan(&ip)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err == nil {
+		s.recordChange(ctx, ip, "anotacao", "Anotações atualizadas (dono/tags/notas)")
+	}
+	return err
+}
+
 func (s *Store) HostByID(ctx context.Context, id int64) (models.Host, error) {
 	var h models.Host
 	err := s.pool.QueryRow(ctx,
 		`SELECT id,ip,hostname,status,mac,vendor,os_guess,asset_type,
-		        COALESCE(agent_id,0),first_seen,last_seen
+		        COALESCE(agent_id,0),first_seen,last_seen,owner,tags,notes
 		 FROM hosts WHERE id=$1`, id).
 		Scan(&h.ID, &h.IP, &h.Hostname, &h.Status, &h.MAC, &h.Vendor,
-			&h.OSGuess, &h.AssetType, &h.AgentID, &h.FirstSeen, &h.LastSeen)
+			&h.OSGuess, &h.AssetType, &h.AgentID, &h.FirstSeen, &h.LastSeen,
+			&h.Owner, &h.Tags, &h.Notes)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return h, ErrNotFound
 	}
